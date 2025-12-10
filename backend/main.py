@@ -6,12 +6,16 @@ import shutil
 import os
 import random
 
+# Import local modules
 import utils_sri, xml_builder, database, auth, firmador
 
 app = FastAPI(title="SaaS Facturación Ecuador")
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login") # Ojo: cambiamos a 'login'
 
-# --- MODELOS ---
+# Security Scheme
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+# --- DATA MODELS ---
+
 class RegistroUsuario(BaseModel):
     nombre: str
     email: str
@@ -25,8 +29,6 @@ class LoginEmail(BaseModel):
     email: str
     password: str
 
-# (Copia aquí tus modelos de FacturaCompleta, DetalleProducto, etc. del código anterior)
-# ... [ESPACIO DE MODELOS DE FACTURA] ...
 class DetalleProducto(BaseModel):
     codigo_principal: str
     descripcion: str
@@ -47,7 +49,7 @@ class TotalImpuesto(BaseModel):
     valor: float
 
 class FacturaCompleta(BaseModel):
-    ruc: str # El RUC ahora viene en la factura, lo validamos contra el usuario
+    ruc: str 
     ambiente: int
     serie: str
     secuencial: Optional[int] = None
@@ -69,43 +71,54 @@ class FacturaCompleta(BaseModel):
     total_impuestos: List[TotalImpuesto]
     forma_pago: str = "01"
 
-# --- DEPENDENCIA ---
+class Recarga(BaseModel):
+    ruc_cliente: str
+    cantidad: int
+
+# --- DEPENDENCIES ---
+
 def get_current_user(token: str = Depends(oauth2_scheme)):
     payload = auth.decode_token(token)
-    if not payload: raise HTTPException(401, "Token inválido")
+    if not payload:
+        raise HTTPException(401, "Token inválido or expirado")
     email = payload.get("sub")
     user = database.buscar_usuario_por_email(email)
-    if not user: raise HTTPException(401, "Usuario no encontrado")
+    if not user:
+        raise HTTPException(401, "Usuario no encontrado")
     return user
 
-@app.on_event("startup")
-def startup():
+# --- LIFECYCLE ---
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     os.makedirs("firmas_clientes", exist_ok=True)
     database.inicializar_tablas()
+    yield
 
-# --- ENDPOINTS NUEVOS ---
+app.router.lifespan_context = lifespan
+
+# --- ENDPOINTS ---
 
 @app.post("/registrar-usuario")
 def registrar_usuario(datos: RegistroUsuario):
-    # Verificar si ya existe
     if database.buscar_usuario_por_email(datos.email):
         raise HTTPException(400, "Este correo ya está registrado.")
     
-    # Generar código de seguridad de 6 dígitos
     codigo = str(random.randint(100000, 999999))
-    print(f"📧 [SIMULACION EMAIL] Código para {datos.email}: {codigo}") # Ver en logs
+    print(f"📧 [SIMULACION EMAIL] Código para {datos.email}: {codigo}") 
     
     hash_pass = auth.get_password_hash(datos.password)
     exito = database.registrar_usuario_inicial(datos.nombre, datos.email, hash_pass, codigo)
     
     if exito:
-        return {"mensaje": "Usuario creado. Revisa tu correo (o los logs) por el código de verificación."}
+        return {"mensaje": "Usuario creado. Revisa tu correo (o logs) por el código."}
     raise HTTPException(500, "Error en base de datos")
 
 @app.post("/verificar-email")
 def verificar_email(datos: VerificarCodigo):
     if database.verificar_codigo_email(datos.email, datos.codigo):
-        return {"mensaje": "Email verificado correctamente. Ya puedes iniciar sesión."}
+        return {"mensaje": "Email verificado. Ya puedes iniciar sesión."}
     raise HTTPException(400, "Código incorrecto.")
 
 @app.post("/login")
@@ -115,16 +128,18 @@ def login(datos: LoginEmail):
         raise HTTPException(401, "Credenciales incorrectas")
     
     if user['email_verificado'] == 0:
-        raise HTTPException(403, "Debes verificar tu email primero (revisa el código).")
+        raise HTTPException(403, "Debes verificar tu email primero.")
         
-token = auth.create_access_token({"sub": user['email']})
+    token = auth.create_access_token({"sub": user['email']})
+    
+    # Correctly aligned variable
     tiene_empresa = user['ruc'] is not None
     
     return {
         "access_token": token, 
         "token_type": "bearer", 
         "configuracion_completa": tiene_empresa,
-        "ruc_usuario": user['ruc'] 
+        "ruc_usuario": user['ruc']
     }
 
 @app.post("/configurar-empresa")
@@ -135,24 +150,21 @@ def configurar_empresa(
     archivo_firma: UploadFile = File(...),
     usuario_actual: dict = Depends(get_current_user)
 ):
-    """Este paso se hace DESPUÉS de loguearse para subir el P12 y RUC"""
-    
-    # Validar que el RUC no esté usado por otro (salvo que sea el mismo usuario actualizando)
+    # Validate RUC uniqueness
     existe = database.buscar_empresa_por_ruc(ruc)
     if existe and existe['email'] != usuario_actual['email']:
         raise HTTPException(400, "Este RUC ya está registrado por otro usuario.")
 
     path = f"firmas_clientes/{ruc}.p12"
     try:
-        with open(path, "wb") as b: shutil.copyfileobj(archivo_firma.file, b)
+        with open(path, "wb") as b: 
+            shutil.copyfileobj(archivo_firma.file, b)
         
-        # Validar P12
         valido, msg = firmador.validar_archivo_p12(path, clave_firma, ruc)
         if not valido:
-            os.remove(path)
+            if os.path.exists(path): os.remove(path)
             raise HTTPException(400, f"Error en firma: {msg}")
             
-        # Guardar datos finales
         database.completar_datos_empresa(usuario_actual['email'], ruc, razon_social, path, clave_firma)
         return {"mensaje": "Empresa configurada exitosamente."}
         
@@ -162,20 +174,25 @@ def configurar_empresa(
 
 @app.post("/emitir-factura")
 def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_user)):
-    # Validaciones
     if not user['ruc']: 
         raise HTTPException(400, "Falta configurar empresa.")
-    if user['ruc'] != factura.ruc:
-        raise HTTPException(403, "El RUC no coincide con tu cuenta.")
+    
+    # Allow passing current user RUC if frontend sends placeholder
+    target_ruc = user['ruc']
+    
     if not user['firma_path']:
         raise HTTPException(400, "Falta firma electrónica.")
     if user['creditos'] <= 0:
         raise HTTPException(402, "Saldo insuficiente.")
 
     try:
+        # Calculate sequential
         secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
         factura.secuencial = secuencial
         
+        # Ensure RUC in XML matches the user
+        factura.ruc = target_ruc
+
         clave = utils_sri.generar_clave_acceso(
             factura.fecha_emision, "01", factura.ruc, factura.ambiente, 
             factura.serie, factura.secuencial, "12345678"
@@ -196,3 +213,10 @@ def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_us
     except Exception as e:
         raise HTTPException(400, str(e))
 
+@app.post("/admin/recargar")
+def recargar_saldo(datos: Recarga):
+    exito = database.recargar_creditos(datos.ruc_cliente, datos.cantidad)
+    if exito:
+        return {"mensaje": f"Recarga exitosa"}
+    else:
+        raise HTTPException(404, "Cliente no encontrado")
