@@ -2,47 +2,49 @@ import mysql.connector
 from mysql.connector import Error
 import os
 
-# --- CONFIGURACIÓN DE TU BASE DE DATOS ---
-# Si estás probando en tu PC y no tienes MySQL instalado, 
-# esto dará error hasta que lo subas a EasyPanel o instales MySQL local.
-
+# --- CONFIGURACIÓN SEGURA ---
+# Lee las variables de EasyPanel o usa valores por defecto en local
 DB_CONFIG = {
-    'host': os.getenv('DB_HOST'),
-    'user': os.getenv('DB_USER'),
-    'password': os.getenv('DB_PASSWORD'), # ¡Aquí déjalo vacío! La inyectaremos desde fuera
-    'database': os.getenv('DB_NAME'),
-    'port': int(os.getenv('DB_PORT'))
+    'host': os.getenv('DB_HOST', 'localhost'),
+    'user': os.getenv('DB_USER', 'root'),
+    'password': os.getenv('DB_PASSWORD', ''),
+    'database': os.getenv('DB_NAME', 'db-facturacion'),
+    'port': int(os.getenv('DB_PORT', 3306))
 }
 
 def get_db_connection():
+    """Crea la conexión a la base de datos"""
     try:
         return mysql.connector.connect(**DB_CONFIG)
     except Error as e:
-        print(f"Error MySQL: {e}")
+        print(f"Error conectando a MySQL: {e}")
         return None
 
 def inicializar_tablas():
+    """Crea las tablas necesarias si no existen"""
     conn = get_db_connection()
     if conn is None: return
     cursor = conn.cursor()
     
     # 1. Tabla EMPRESAS (Clientes)
-sql_empresas = """
+    # Nota: firma_path y firma_clave aceptan NULL para permitir registro sin archivo inicial
+    sql_empresas = """
     CREATE TABLE IF NOT EXISTS empresas (
         id INT AUTO_INCREMENT PRIMARY KEY,
         ruc VARCHAR(13) NOT NULL UNIQUE,
         razon_social VARCHAR(300) NOT NULL,
-        email VARCHAR(255),        -- NUEVO
-        telefono VARCHAR(50),      -- NUEVO
+        email VARCHAR(255),
+        telefono VARCHAR(50),
         password_hash VARCHAR(255),
-        firma_path VARCHAR(255) NULL, -- AHORA PUEDE SER NULL (VACÍO)
-        firma_clave VARCHAR(255) NULL, -- AHORA PUEDE SER NULL
+        firma_path VARCHAR(255) NULL,
+        firma_clave VARCHAR(255) NULL,
         creditos INT DEFAULT 10,
-        activo BOOLEAN DEFAULT 1
+        activo BOOLEAN DEFAULT 1,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """
     
-    # 2. Tabla SECUENCIALES (Control de números)
+    # 2. Tabla PUNTOS DE EMISION (Control de secuenciales)
     sql_puntos = """
     CREATE TABLE IF NOT EXISTS puntos_emision (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -73,35 +75,36 @@ sql_empresas = """
         cursor.execute(sql_puntos)
         cursor.execute(sql_comprobantes)
         conn.commit()
-        print("✅ Base de datos inicializada correctamente.")
+        print("✅ Tablas de base de datos verificadas/creadas.")
     except Error as e:
-        print(f"❌ Error DB Init: {e}")
+        print(f"❌ Error inicializando tablas: {e}")
     finally:
         cursor.close()
         conn.close()
 
-# --- FUNCIONES DE LÓGICA ---
+# --- FUNCIONES DE GESTIÓN DE EMPRESAS ---
 
 def crear_empresa(ruc, razon_social, pass_hash, email, telefono):
+    """Registra una nueva empresa (sin firma al inicio)"""
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
     try:
-        # Al registrarse, firma_path y firma_clave van vacíos (None)
+        # Insertamos NULL en los campos de firma
         sql = """INSERT INTO empresas (ruc, razon_social, password_hash, email, telefono, firma_path, firma_clave) 
                  VALUES (%s, %s, %s, %s, %s, NULL, NULL)"""
         cursor.execute(sql, (ruc, razon_social, pass_hash, email, telefono))
         conn.commit()
         return True
     except Error as e:
-        print(f"Error crear empresa: {e}")
+        print(f"Error creando empresa: {e}")
         return False
     finally:
         cursor.close()
         conn.close()
 
-# NUEVA FUNCIÓN: ACTUALIZAR FIRMA
 def actualizar_firma_cliente(ruc, path_firma, clave_firma):
+    """Guarda la ruta y clave del .p12 cuando el cliente lo sube"""
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
@@ -110,33 +113,39 @@ def actualizar_firma_cliente(ruc, path_firma, clave_firma):
         cursor.execute(sql, (path_firma, clave_firma, ruc))
         conn.commit()
         return True
-    except Error:
+    except Error as e:
+        print(f"Error actualizando firma: {e}")
         return False
     finally:
         cursor.close()
         conn.close()
 
 def buscar_empresa_por_ruc(ruc):
+    """Busca datos de empresa para login y facturación"""
     conn = get_db_connection()
     if not conn: return None
-    cursor = conn.cursor(dictionary=True)
+    # dictionary=True es vital para acceder como empresa['id']
+    cursor = conn.cursor(dictionary=True) 
     try:
-        cursor.execute("SELECT * FROM empresas WHERE ruc = %s", (ruc,))
+        cursor.execute("SELECT * FROM empresas WHERE ruc = %s AND activo = 1", (ruc,))
         return cursor.fetchone()
     finally:
         cursor.close()
         conn.close()
 
+# --- FUNCIONES DE FACTURACIÓN ---
+
 def obtener_siguiente_secuencial(empresa_id, serie):
+    """Calcula el número de factura automático (1, 2, 3...)"""
     conn = get_db_connection()
     if not conn: return None
     cursor = conn.cursor()
     try:
-        # Intenta actualizar sumando 1
+        # 1. Intentar incrementar
         sql_update = "UPDATE puntos_emision SET ultimo_secuencial = ultimo_secuencial + 1 WHERE empresa_id = %s AND serie = %s"
         cursor.execute(sql_update, (empresa_id, serie))
         
-        # Si no existía, lo crea empezando en 1
+        # 2. Si no existía, crear el registro inicial
         if cursor.rowcount == 0:
             sql_insert = "INSERT INTO puntos_emision (empresa_id, serie, ultimo_secuencial) VALUES (%s, %s, 1)"
             cursor.execute(sql_insert, (empresa_id, serie))
@@ -144,18 +153,20 @@ def obtener_siguiente_secuencial(empresa_id, serie):
             return 1
             
         conn.commit()
-        # Devuelve el número actual
+        
+        # 3. Obtener el valor actualizado
         cursor.execute("SELECT ultimo_secuencial FROM puntos_emision WHERE empresa_id = %s AND serie = %s", (empresa_id, serie))
         res = cursor.fetchone()
         return res[0] if res else None
     except Error as e:
-        print(f"Error Secuencial: {e}")
+        print(f"Error secuencial: {e}")
         return None
     finally:
         cursor.close()
         conn.close()
 
 def guardar_factura_bd(empresa_id, clave, tipo, xml):
+    """Guarda el XML final en la base de datos"""
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
@@ -164,24 +175,24 @@ def guardar_factura_bd(empresa_id, clave, tipo, xml):
         cursor.execute(sql, (empresa_id, clave, tipo, xml))
         conn.commit()
         return True
-    except Error:
+    except Error as e:
+        print(f"Error guardando factura: {e}")
         return False
     finally:
         cursor.close()
         conn.close()
 
+# --- FUNCIONES DE CRÉDITOS (ECONOMÍA) ---
 
 def descontar_credito(empresa_id):
+    """Resta 1 crédito al emitir factura"""
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
     try:
-        # Restamos 1 solo si tiene saldo positivo
         sql = "UPDATE empresas SET creditos = creditos - 1 WHERE id = %s AND creditos > 0"
         cursor.execute(sql, (empresa_id,))
         conn.commit()
-        
-        # rowcount nos dice cuántas filas cambió. Si es 0, es que no tenía saldo.
         return cursor.rowcount > 0 
     except Error:
         return False
@@ -189,8 +200,8 @@ def descontar_credito(empresa_id):
         cursor.close()
         conn.close()
 
-# --- NUEVA FUNCIÓN (ADMIN): RECARGAR SALDO ---
 def recargar_creditos(ruc, cantidad):
+    """Suma créditos (Usado por el Admin)"""
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
@@ -198,8 +209,10 @@ def recargar_creditos(ruc, cantidad):
         sql = "UPDATE empresas SET creditos = creditos + %s WHERE ruc = %s"
         cursor.execute(sql, (cantidad, ruc))
         conn.commit()
-        return True
+        # Verificar si se actualizó alguien (si el RUC existe)
+        return cursor.rowcount > 0
+    except Error:
+        return False
     finally:
         cursor.close()
-
         conn.close()
