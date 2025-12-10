@@ -101,30 +101,50 @@ def startup_event():
 def registrar_empresa(
     ruc: str = Form(...),
     razon_social: str = Form(...),
-    password_login: str = Form(...), # <--- Nuevo: Contraseña para el sistema
-    clave_firma: str = Form(...),    # Contraseña del archivo .p12
-    archivo_firma: UploadFile = File(...)
+    password_login: str = Form(...),
+    email: str = Form(...),    # Nuevo campo
+    telefono: str = Form(...)  # Nuevo campo
 ):
-    """Registra una nueva empresa y guarda su firma electrónica."""
-    path_firma = f"firmas_clientes/{ruc}.p12"
+    pass_hash = auth.get_password_hash(password_login)
+    exito = database.crear_empresa(ruc, razon_social, pass_hash, email, telefono)
+    if exito:
+        return {"mensaje": "Cuenta creada. Por favor inicia sesión para configurar tu firma."}
+    else:
+        raise HTTPException(400, "Error: El RUC ya existe")
+
+# Nuevo Endpoint: Subir Firma (Validando)
+@app.post("/subir-firma")
+def subir_firma_electronica(
+    clave_firma: str = Form(...),
+    archivo_firma: UploadFile = File(...),
+    empresa_actual: dict = Depends(get_current_empresa)
+):
+    # 1. Guardar temporalmente para validar
+    path_firma = f"firmas_clientes/{empresa_actual['ruc']}.p12"
+    
     try:
-        # 1. Guardar archivo .p12
         with open(path_firma, "wb") as buffer:
             shutil.copyfileobj(archivo_firma.file, buffer)
             
-        # 2. Encriptar contraseña de login
-        pass_hash = auth.get_password_hash(password_login)
+        # 2. VALIDAR (Llamamos a la función nueva)
+        es_valida, mensaje = firmador.validar_archivo_p12(
+            path_firma, 
+            clave_firma, 
+            empresa_actual['ruc']
+        )
         
-        # 3. Guardar en Base de Datos
-        exito = database.crear_empresa(ruc, razon_social, path_firma, clave_firma, pass_hash)
-        
-        if exito:
-            return {"mensaje": "Empresa registrada con éxito. Ahora puede iniciar sesión."}
-        else:
-            raise HTTPException(400, "Error: El RUC ya existe o falló la BD")
+        if not es_valida:
+            os.remove(path_firma) # Borramos el archivo malo
+            raise HTTPException(400, detail=f"Firma Inválida: {mensaje}")
             
+        # 3. Si es válida, actualizamos la BD
+        database.actualizar_firma_cliente(empresa_actual['ruc'], path_firma, clave_firma)
+        
+        return {"mensaje": "✅ Firma electrónica validada y guardada correctamente."}
+        
     except Exception as e:
-        raise HTTPException(500, str(e))
+        if os.path.exists(path_firma): os.remove(path_firma) # Limpieza
+        raise HTTPException(500, detail=str(e))
 
 @app.post("/token")
 def login(datos: LoginData):
@@ -218,4 +238,5 @@ def recargar_saldo(datos: Recarga):
     if exito:
         return {"mensaje": f"Se agregaron {datos.cantidad} créditos al RUC {datos.ruc_cliente}"}
     else:
+
         raise HTTPException(404, "Cliente no encontrado")
