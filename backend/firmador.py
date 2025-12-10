@@ -2,6 +2,7 @@ import datetime
 from endesive import xades
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.x509.oid import NameOID
 import os
 
 def firmar_xml(xml_string, ruta_p12, password_p12):
@@ -45,4 +46,46 @@ def firmar_xml(xml_string, ruta_p12, password_p12):
         return xml_firmado.decode('utf-8')
 
     except Exception as e:
+
         raise Exception(f"Error en el proceso de firma: {str(e)}")
+
+def validar_archivo_p12(ruta_p12, password, ruc_usuario):
+    """
+    Verifica:
+    1. Que la contraseña abra el archivo.
+    2. Que no esté expirado.
+    3. Que el RUC dentro de la firma coincida con el usuario.
+    """
+    try:
+        with open(ruta_p12, 'rb') as f:
+            p12_data = f.read()
+        
+        # Intentamos abrir el P12
+        private_key, certificate, additional_certificates = pkcs12.load_key_and_certificates(
+            p12_data, 
+            password.encode('utf-8')
+        )
+        
+        # 1. Validar Fechas
+        now = datetime.datetime.now()
+        if now > certificate.not_valid_after:
+            return False, f"La firma electrónica expiró el {certificate.not_valid_after}"
+        
+        if now < certificate.not_valid_before:
+            return False, "La firma electrónica aún no es válida (fecha futura)."
+
+        # 2. Validar RUC (Buscamos el RUC en el 'Subject' del certificado)
+        # El formato suele ser "RAZON SOCIAL ... RUC: 17XXXXXX001" o similar en el CommonName
+        subject = certificate.subject.rfc4514_string() # Devuelve todo el texto del dueño
+        
+        if ruc_usuario not in subject:
+            # A veces el RUC está en el Serial Number o CN, si no lo encuentra exacto, lanzamos advertencia o error
+            # Para ser estrictos:
+            return False, f"El RUC de la firma no coincide con el usuario ({ruc_usuario}). ¿Subiste la firma correcta?"
+
+        return True, "Firma válida"
+
+    except ValueError:
+        return False, "Contraseña de la firma incorrecta."
+    except Exception as e:
+        return False, f"Error leyendo firma: {str(e)}"
