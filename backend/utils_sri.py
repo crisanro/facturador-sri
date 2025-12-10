@@ -1,5 +1,6 @@
 import random
 from itertools import cycle
+import requests
 
 def calcular_modulo11(clave_sin_digito):
     """
@@ -100,4 +101,44 @@ if __name__ == "__main__":
     )
     
     print(f"Clave generada: {mi_clave}")
+
     print(f"Longitud: {len(mi_clave)}") # Debe ser 49
+
+
+def consultar_datos_ruc_sri(ruc):
+    """
+    Consulta la API pública del SRI en Línea.
+    """
+    url = f"https://srienlinea.sri.gob.ec/sri-catastro-sujeto-servicio-internet/rest/ConsolidadoContribuyente/obtenerPorNumerosRuc?ruc={ruc}"
+    
+    # Headers para parecer un navegador normal (a veces bloquean bots simples)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3"
+    }
+
+    try:
+        response = requests.get(url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            datos = response.json()
+            
+            # Si devuelve una lista vacía [], el RUC no existe
+            if not datos:
+                return {"valido": False, "error": "RUC no encontrado en el SRI"}
+            
+            # El SRI devuelve una lista, tomamos el primero
+            contribuyente = datos[0]
+            
+            # Extraemos lo que nos sirve
+            return {
+                "valido": True,
+                "razon_social": contribuyente.get("razonSocial"),
+                "nombre_comercial": contribuyente.get("nombreComercial", contribuyente.get("razonSocial")), # Fallback
+                "estado": contribuyente.get("estadoContribuyenteRuc"), # "ACTIVO", "SUSPENDIDO"...
+                "direccion": "" # Este endpoint no nos da la dirección, la dejaremos vacía
+            }
+        else:
+            return {"valido": False, "error": "Error al conectar con SRI"}
+            
+    except Exception as e:
+        return {"valido": False, "error": f"Error de conexión: {str(e)}"}
