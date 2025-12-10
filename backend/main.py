@@ -163,11 +163,14 @@ def emitir_factura(
     factura: FacturaCompleta, 
     empresa_actual: dict = Depends(get_current_empresa)
 ):
-    # 1. Seguridad de RUC
+    # 1. Validación de Firma
+    if not empresa_actual['firma_path']:
+        raise HTTPException(400, "No has configurado tu Firma Electrónica. Ve al panel de control.")
+    # 2. Seguridad de RUC
     if factura.ruc != empresa_actual['ruc']:
         raise HTTPException(status_code=403, detail="RUC incorrecto")
 
-    # 2. VALIDACIÓN DE SALDO (¡EL COBRO!)
+    # 3. VALIDACIÓN DE SALDO (¡EL COBRO!)
     if empresa_actual['creditos'] <= 0:
         raise HTTPException(
             status_code=402, # 402 = Payment Required (Pago Requerido)
@@ -240,3 +243,4 @@ def recargar_saldo(datos: Recarga):
     else:
 
         raise HTTPException(404, "Cliente no encontrado")
+
