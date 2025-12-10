@@ -5,16 +5,26 @@ from typing import List, Optional
 import shutil
 import os
 import random
+from contextlib import asynccontextmanager
 
-# Import local modules
+# Importamos nuestros módulos locales
 import utils_sri, xml_builder, database, auth, firmador
 
-app = FastAPI(title="SaaS Facturación Ecuador")
+# --- LIFECYCLE (INICIO/APAGADO) ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Se ejecuta al iniciar
+    os.makedirs("firmas_clientes", exist_ok=True)
+    database.inicializar_tablas()
+    yield
+    # Se ejecuta al apagar (opcional)
 
-# Security Scheme
+app = FastAPI(title="SaaS Facturación Ecuador", lifespan=lifespan)
+
+# Seguridad
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
 
-# --- DATA MODELS ---
+# --- MODELOS DE DATOS ---
 
 class RegistroUsuario(BaseModel):
     nombre: str
@@ -75,28 +85,17 @@ class Recarga(BaseModel):
     ruc_cliente: str
     cantidad: int
 
-# --- DEPENDENCIES ---
+# --- DEPENDENCIA ---
 
 def get_current_user(token: str = Depends(oauth2_scheme)):
     payload = auth.decode_token(token)
     if not payload:
-        raise HTTPException(401, "Token inválido or expirado")
+        raise HTTPException(401, "Token inválido o expirado")
     email = payload.get("sub")
     user = database.buscar_usuario_por_email(email)
     if not user:
         raise HTTPException(401, "Usuario no encontrado")
     return user
-
-# --- LIFECYCLE ---
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    os.makedirs("firmas_clientes", exist_ok=True)
-    database.inicializar_tablas()
-    yield
-
-app.router.lifespan_context = lifespan
 
 # --- ENDPOINTS ---
 
@@ -132,7 +131,7 @@ def login(datos: LoginEmail):
         
     token = auth.create_access_token({"sub": user['email']})
     
-    # Correctly aligned variable
+    # Aquí estaba el error de indentación, ahora está alineado
     tiene_empresa = user['ruc'] is not None
     
     return {
@@ -150,7 +149,7 @@ def configurar_empresa(
     archivo_firma: UploadFile = File(...),
     usuario_actual: dict = Depends(get_current_user)
 ):
-    # Validate RUC uniqueness
+    # Validar unicidad RUC
     existe = database.buscar_empresa_por_ruc(ruc)
     if existe and existe['email'] != usuario_actual['email']:
         raise HTTPException(400, "Este RUC ya está registrado por otro usuario.")
@@ -177,7 +176,7 @@ def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_us
     if not user['ruc']: 
         raise HTTPException(400, "Falta configurar empresa.")
     
-    # Allow passing current user RUC if frontend sends placeholder
+    # Forzamos que el RUC sea el del usuario logueado
     target_ruc = user['ruc']
     
     if not user['firma_path']:
@@ -186,12 +185,9 @@ def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_us
         raise HTTPException(402, "Saldo insuficiente.")
 
     try:
-        # Calculate sequential
         secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
         factura.secuencial = secuencial
-        
-        # Ensure RUC in XML matches the user
-        factura.ruc = target_ruc
+        factura.ruc = target_ruc # Aseguramos consistencia
 
         clave = utils_sri.generar_clave_acceso(
             factura.fecha_emision, "01", factura.ruc, factura.ambiente, 
@@ -217,6 +213,6 @@ def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_us
 def recargar_saldo(datos: Recarga):
     exito = database.recargar_creditos(datos.ruc_cliente, datos.cantidad)
     if exito:
-        return {"mensaje": f"Recarga exitosa"}
+        return {"mensaje": "Recarga exitosa"}
     else:
         raise HTTPException(404, "Cliente no encontrado")
