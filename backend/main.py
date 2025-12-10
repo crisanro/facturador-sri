@@ -4,21 +4,29 @@ from pydantic import BaseModel
 from typing import List, Optional
 import shutil
 import os
+import random
 
-# --- IMPORTAMOS NUESTROS MÓDULOS ---
-import utils_sri
-import xml_builder
-import database
-import auth       # <--- Nuevo: Seguridad
-import firmador   # <--- Nuevo: Firma Electrónica
+import utils_sri, xml_builder, database, auth, firmador
 
 app = FastAPI(title="SaaS Facturación Ecuador")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login") # Ojo: cambiamos a 'login'
 
-# Configuración de Seguridad (Dónde buscar el token)
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+# --- MODELOS ---
+class RegistroUsuario(BaseModel):
+    nombre: str
+    email: str
+    password: str
 
-# --- MODELOS DE DATOS ---
+class VerificarCodigo(BaseModel):
+    email: str
+    codigo: str
 
+class LoginEmail(BaseModel):
+    email: str
+    password: str
+
+# (Copia aquí tus modelos de FacturaCompleta, DetalleProducto, etc. del código anterior)
+# ... [ESPACIO DE MODELOS DE FACTURA] ...
 class DetalleProducto(BaseModel):
     codigo_principal: str
     descripcion: str
@@ -39,208 +47,147 @@ class TotalImpuesto(BaseModel):
     valor: float
 
 class FacturaCompleta(BaseModel):
-    # Datos Clave
-    ruc: str
+    ruc: str # El RUC ahora viene en la factura, lo validamos contra el usuario
     ambiente: int
     serie: str
     secuencial: Optional[int] = None
     fecha_emision: str 
-    
-    # Datos Emisor y Cliente
     razon_social_emisor: str
     nombre_comercial: Optional[str] = None
     direccion_matriz: str
     direccion_establecimiento: str
     obligado_contabilidad: str
-    
     tipo_identificacion_comprador: str 
     razon_social_comprador: str
     identificacion_comprador: str
     direccion_comprador: Optional[str] = None
-    
-    # Totales
     total_sin_impuestos: float
     total_descuento: float
     importe_total: float
     propina: float = 0.0
-    
     detalles: List[DetalleProducto]
     total_impuestos: List[TotalImpuesto]
     forma_pago: str = "01"
 
-# Modelo para Login
-class LoginData(BaseModel):
-    ruc: str
-    password: str
-
-# --- DEPENDENCIA DE SEGURIDAD ---
-# Esta función protege los endpoints. Si no hay token válido, bloquea el acceso.
-def get_current_empresa(token: str = Depends(oauth2_scheme)):
+# --- DEPENDENCIA ---
+def get_current_user(token: str = Depends(oauth2_scheme)):
     payload = auth.decode_token(token)
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token inválido o expirado",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    ruc = payload.get("sub")
-    empresa = database.buscar_empresa_por_ruc(ruc)
-    if not empresa:
-        raise HTTPException(status_code=401, detail="Empresa no encontrada")
-    return empresa
+    if not payload: raise HTTPException(401, "Token inválido")
+    email = payload.get("sub")
+    user = database.buscar_usuario_por_email(email)
+    if not user: raise HTTPException(401, "Usuario no encontrado")
+    return user
 
-# --- INICIO ---
 @app.on_event("startup")
-def startup_event():
+def startup():
     os.makedirs("firmas_clientes", exist_ok=True)
     database.inicializar_tablas()
 
-# --- ENDPOINTS PÚBLICOS ---
+# --- ENDPOINTS NUEVOS ---
 
-@app.post("/registrar-empresa")
-def registrar_empresa(
+@app.post("/registrar-usuario")
+def registrar_usuario(datos: RegistroUsuario):
+    # Verificar si ya existe
+    if database.buscar_usuario_por_email(datos.email):
+        raise HTTPException(400, "Este correo ya está registrado.")
+    
+    # Generar código de seguridad de 6 dígitos
+    codigo = str(random.randint(100000, 999999))
+    print(f"📧 [SIMULACION EMAIL] Código para {datos.email}: {codigo}") # Ver en logs
+    
+    hash_pass = auth.get_password_hash(datos.password)
+    exito = database.registrar_usuario_inicial(datos.nombre, datos.email, hash_pass, codigo)
+    
+    if exito:
+        return {"mensaje": "Usuario creado. Revisa tu correo (o los logs) por el código de verificación."}
+    raise HTTPException(500, "Error en base de datos")
+
+@app.post("/verificar-email")
+def verificar_email(datos: VerificarCodigo):
+    if database.verificar_codigo_email(datos.email, datos.codigo):
+        return {"mensaje": "Email verificado correctamente. Ya puedes iniciar sesión."}
+    raise HTTPException(400, "Código incorrecto.")
+
+@app.post("/login")
+def login(datos: LoginEmail):
+    user = database.buscar_usuario_por_email(datos.email)
+    if not user or not auth.verify_password(datos.password, user['password_hash']):
+        raise HTTPException(401, "Credenciales incorrectas")
+    
+    if user['email_verificado'] == 0:
+        raise HTTPException(403, "Debes verificar tu email primero (revisa el código).")
+        
+    token = auth.create_access_token({"sub": user['email']})
+    
+    # Devolvemos info extra para saber si ya configuró su empresa
+    tiene_empresa = user['ruc'] is not None
+    return {"access_token": token, "token_type": "bearer", "configuracion_completa": tiene_empresa}
+
+@app.post("/configurar-empresa")
+def configurar_empresa(
     ruc: str = Form(...),
     razon_social: str = Form(...),
-    password_login: str = Form(...),
-    email: str = Form(...),    # Nuevo campo
-    telefono: str = Form(...)  # Nuevo campo
-):
-    pass_hash = auth.get_password_hash(password_login)
-    exito = database.crear_empresa(ruc, razon_social, pass_hash, email, telefono)
-    if exito:
-        return {"mensaje": "Cuenta creada. Por favor inicia sesión para configurar tu firma."}
-    else:
-        raise HTTPException(400, "Error: El RUC ya existe")
-
-# Nuevo Endpoint: Subir Firma (Validando)
-@app.post("/subir-firma")
-def subir_firma_electronica(
     clave_firma: str = Form(...),
     archivo_firma: UploadFile = File(...),
-    empresa_actual: dict = Depends(get_current_empresa)
+    usuario_actual: dict = Depends(get_current_user)
 ):
-    # 1. Guardar temporalmente para validar
-    path_firma = f"firmas_clientes/{empresa_actual['ruc']}.p12"
+    """Este paso se hace DESPUÉS de loguearse para subir el P12 y RUC"""
     
+    # Validar que el RUC no esté usado por otro (salvo que sea el mismo usuario actualizando)
+    existe = database.buscar_empresa_por_ruc(ruc)
+    if existe and existe['email'] != usuario_actual['email']:
+        raise HTTPException(400, "Este RUC ya está registrado por otro usuario.")
+
+    path = f"firmas_clientes/{ruc}.p12"
     try:
-        with open(path_firma, "wb") as buffer:
-            shutil.copyfileobj(archivo_firma.file, buffer)
-            
-        # 2. VALIDAR (Llamamos a la función nueva)
-        es_valida, mensaje = firmador.validar_archivo_p12(
-            path_firma, 
-            clave_firma, 
-            empresa_actual['ruc']
-        )
+        with open(path, "wb") as b: shutil.copyfileobj(archivo_firma.file, b)
         
-        if not es_valida:
-            os.remove(path_firma) # Borramos el archivo malo
-            raise HTTPException(400, detail=f"Firma Inválida: {mensaje}")
+        # Validar P12
+        valido, msg = firmador.validar_archivo_p12(path, clave_firma, ruc)
+        if not valido:
+            os.remove(path)
+            raise HTTPException(400, f"Error en firma: {msg}")
             
-        # 3. Si es válida, actualizamos la BD
-        database.actualizar_firma_cliente(empresa_actual['ruc'], path_firma, clave_firma)
-        
-        return {"mensaje": "✅ Firma electrónica validada y guardada correctamente."}
+        # Guardar datos finales
+        database.completar_datos_empresa(usuario_actual['email'], ruc, razon_social, path, clave_firma)
+        return {"mensaje": "Empresa configurada exitosamente."}
         
     except Exception as e:
-        if os.path.exists(path_firma): os.remove(path_firma) # Limpieza
-        raise HTTPException(500, detail=str(e))
+        if os.path.exists(path): os.remove(path)
+        raise HTTPException(500, str(e))
 
-@app.post("/token")
-def login(datos: LoginData):
-    """Genera un Token de acceso si el RUC y contraseña son correctos."""
-    empresa = database.buscar_empresa_por_ruc(datos.ruc)
-    
-    if not empresa or not auth.verify_password(datos.password, empresa['password_hash']):
-        raise HTTPException(status_code=401, detail="RUC o contraseña incorrectos")
-        
-    access_token = auth.create_access_token(data={"sub": empresa['ruc']})
-    return {"access_token": access_token, "token_type": "bearer"}
-
-# --- ENDPOINTS PROTEGIDOS (Requieren Token) ---
 @app.post("/emitir-factura")
-def emitir_factura(
-    factura: FacturaCompleta, 
-    empresa_actual: dict = Depends(get_current_empresa)
-):
-    # 1. Validación de Firma
-    if not empresa_actual['firma_path']:
-        raise HTTPException(400, "No has configurado tu Firma Electrónica. Ve al panel de control.")
-    # 2. Seguridad de RUC
-    if factura.ruc != empresa_actual['ruc']:
-        raise HTTPException(status_code=403, detail="RUC incorrecto")
-
-    # 3. VALIDACIÓN DE SALDO (¡EL COBRO!)
-    if empresa_actual['creditos'] <= 0:
-        raise HTTPException(
-            status_code=402, # 402 = Payment Required (Pago Requerido)
-            detail="⚠️ Saldo insuficiente. Por favor recarga créditos para seguir facturando."
-        )
+def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_user)):
+    # Validaciones
+    if not user['ruc']: 
+        raise HTTPException(400, "Falta configurar empresa.")
+    if user['ruc'] != factura.ruc:
+        raise HTTPException(403, "El RUC no coincide con tu cuenta.")
+    if not user['firma_path']:
+        raise HTTPException(400, "Falta firma electrónica.")
+    if user['creditos'] <= 0:
+        raise HTTPException(402, "Saldo insuficiente.")
 
     try:
-        # 2. Calcular Secuencial Automático
-        secuencial_auto = database.obtener_siguiente_secuencial(empresa_actual['id'], factura.serie)
-        if not secuencial_auto:
-            raise HTTPException(500, "Error generando secuencial")
-            
-        factura.secuencial = secuencial_auto
-
-        # 3. Generar Clave de Acceso
+        secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
+        factura.secuencial = secuencial
+        
         clave = utils_sri.generar_clave_acceso(
-            fecha_emision=factura.fecha_emision,
-            tipo_comprobante="01",
-            ruc=factura.ruc,
-            ambiente=factura.ambiente,
-            serie=factura.serie,
-            secuencial=factura.secuencial, 
-            codigo_numerico="12345678"
+            factura.fecha_emision, "01", factura.ruc, factura.ambiente, 
+            factura.serie, factura.secuencial, "12345678"
         )
         
-        # 4. Generar XML Crudo
         xml_crudo = xml_builder.crear_xml_factura(factura, clave)
+        xml_firmado = firmador.firmar_xml(xml_crudo, user['firma_path'], user['firma_clave'])
         
-        # 5. FIRMAR EL XML (La parte nueva)
-        try:
-            xml_firmado = firmador.firmar_xml(
-                xml_string=xml_crudo,
-                ruta_p12=empresa_actual['firma_path'],
-                password_p12=empresa_actual['firma_clave']
-            )
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error firmando XML: {str(e)}")
+        database.guardar_factura_bd(user['id'], clave, "01", xml_firmado)
+        database.descontar_credito(user['id'])
         
-        # 6. Guardar en Base de Datos (El firmado)
-        database.guardar_factura_bd(empresa_actual['id'], clave, "01", xml_firmado)
-        
-        # 7. RESTAR EL CRÉDITO
-        database.descontar_credito(empresa_actual['id'])
-
-        # Obtener saldo restante para mostrarlo
-        saldo_restante = empresa_actual['creditos'] - 1
-
         return {
-            "estado": "firmado",
-            "mensaje": "Factura generada con éxito.",
-            "creditos_restantes": saldo_restante, # Le avisamos cuánto le queda
-            "clave_acceso": clave,
-            "xml_firmado": xml_firmado
+            "estado": "firmado", 
+            "clave_acceso": clave, 
+            "xml_firmado": xml_firmado,
+            "creditos_restantes": user['creditos'] - 1
         }
-
     except Exception as e:
-        raise HTTPException(400, f"Error: {str(e)}")
-    
-
-class Recarga(BaseModel):
-    ruc_cliente: str
-    cantidad: int
-
-@app.post("/admin/recargar")
-def recargar_saldo(datos: Recarga):
-    """Endpoint para que TÚ le recargues saldo a un cliente"""
-    exito = database.recargar_creditos(datos.ruc_cliente, datos.cantidad)
-    if exito:
-        return {"mensaje": f"Se agregaron {datos.cantidad} créditos al RUC {datos.ruc_cliente}"}
-    else:
-
-        raise HTTPException(404, "Cliente no encontrado")
-
+        raise HTTPException(400, str(e))
