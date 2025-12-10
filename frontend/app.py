@@ -3,56 +3,64 @@ import requests
 import os
 import time
 
-# --- CONFIGURACIÓN ---
-BACKEND_URL = os.getenv("API_URL", "http://api-facturacion:80")
-
-# ¡PON TU RUC DE ADMINISTRADOR AQUÍ! 
-# (Con este RUC podrás ver el panel para recargar saldo a otros)
+# --- 1. CONFIGURACIÓN INICIAL ---
+# Ajusta el puerto si en tu backend usas 8000
+BACKEND_URL = os.getenv("API_URL", "http://facturador-backend:80") 
 RUC_ADMIN = "1760013210001" 
 
-st.set_page_config(page_title="Facturación SaaS", page_icon="🧾", layout="centered")
+st.set_page_config(page_title="Facturación SaaS", page_icon="🧾", layout="wide")
 
-# --- ESTILOS ---
+# --- 2. ESTILOS CSS PARA QUE SE VEA PROFESIONAL ---
 st.markdown("""
     <style>
-    .stButton>button { width: 100%; background-color: #FF4B4B; color: white; }
+    .stButton>button { width: 100%; font-weight: bold; border-radius: 8px; }
+    .metric-card { background-color: #f0f2f6; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #ff4b4b; }
+    .auth-container { max-width: 400px; margin: auto; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- SESIÓN ---
+# --- 3. GESTIÓN DE ESTADO (SESIÓN) ---
 if 'token' not in st.session_state: st.session_state.token = None
 if 'config_completa' not in st.session_state: st.session_state.config_completa = False
-if 'empresa_ruc' not in st.session_state: st.session_state.empresa_ruc = None # Para saber quién es el admin
+if 'empresa_ruc' not in st.session_state: st.session_state.empresa_ruc = None
+if 'datos_sri_temp' not in st.session_state: st.session_state.datos_sri_temp = {}
 
-# --- FUNCIONES API ---
+# --- 4. FUNCIONES DE CONEXIÓN CON EL BACKEND ---
 
 def do_login(email, password):
+    """Inicia sesión y guarda el token y estado del usuario"""
     try:
         res = requests.post(f"{BACKEND_URL}/login", json={"email": email, "password": password})
         if res.status_code == 200:
             data = res.json()
             st.session_state.token = data["access_token"]
             st.session_state.config_completa = data["configuracion_completa"]
-            
-            # Decodificamos el RUC del usuario (si ya lo tiene) para saber si es admin
-            # Nota: Idealmente el backend debería devolver el RUC en el login, 
-            # pero por ahora asumimos que si entra, el backend validará permisos.
-            # Para efectos visuales, hacemos una llamada rápida para obtener datos:
-            # (Opcional, se puede mejorar luego)
-            st.session_state.empresa_ruc = data.get("ruc_usuario")
+            st.session_state.empresa_ruc = data.get("ruc_usuario") # Vital para saber si es admin
             st.rerun()
         elif res.status_code == 403:
-            st.error("⚠️ Debes verificar tu email primero.")
+            st.error("⚠️ Tu email no ha sido verificado. Revisa los logs por el código.")
         else:
-            st.error("Credenciales incorrectas")
-    except: st.error("Error de conexión con el servidor")
+            st.error("❌ Credenciales incorrectas")
+    except Exception as e:
+        st.error(f"No hay conexión con el Backend: {e}")
+
+def consultar_ruc_api(ruc):
+    """Consulta al backend, quien a su vez consulta al SRI"""
+    try:
+        res = requests.get(f"{BACKEND_URL}/consultar-ruc/{ruc}")
+        if res.status_code == 200:
+            return res.json()
+        return None
+    except:
+        return None
 
 def recargar_saldo_admin(ruc_cliente, cantidad):
-    """Función exclusiva ADMIN"""
+    """Función secreta para el dueño del SaaS"""
+    headers = {"Authorization": f"Bearer {st.session_state.token}"} # Opcional si proteges el endpoint
     try:
         res = requests.post(f"{BACKEND_URL}/admin/recargar", json={"ruc_cliente": ruc_cliente, "cantidad": cantidad})
         if res.status_code == 200:
-            st.success(f"✅ Recarga exitosa al RUC {ruc_cliente}")
+            st.success(f"✅ Recarga de {cantidad} créditos exitosa al RUC {ruc_cliente}")
         else:
             st.error(f"Error: {res.text}")
     except Exception as e:
@@ -66,134 +74,183 @@ def emitir_factura_api(payload):
         return None
 
 # ==========================================
-#              VISTAS
+#              INTERFAZ DE USUARIO
 # ==========================================
 
-# --- VISTA 1: LOGIN / REGISTRO ---
+# --- ESCENA 1: LOGIN / REGISTRO (Si no hay token) ---
 if not st.session_state.token:
-    st.title("Bienvenido 👋")
-    tab1, tab2, tab3 = st.tabs(["Ingresar", "Crear Cuenta", "Verificar Código"])
-    
-    with tab1:
-        email = st.text_input("Email")
-        pw = st.text_input("Contraseña", type="password")
-        if st.button("Entrar"): do_login(email, pw)
-            
-    with tab2:
-        n_nombre = st.text_input("Tu Nombre")
-        n_email = st.text_input("Tu Correo")
-        n_p1 = st.text_input("Contraseña", type="password", key="p1")
-        n_p2 = st.text_input("Repetir Contraseña", type="password", key="p2")
+    c1, c2, c3 = st.columns([1, 2, 1]) # Centramos el contenido
+    with c2:
+        st.title("Bienvenido 👋")
+        st.markdown("##### Sistema de Facturación Electrónica SRI")
         
-        if st.button("Registrarse"):
-            if n_p1 != n_p2:
-                st.error("Las contraseñas no coinciden")
-            else:
-                res = requests.post(f"{BACKEND_URL}/registrar-usuario", json={"nombre":n_nombre, "email":n_email, "password":n_p1})
-                if res.status_code == 200:
-                    st.success("✅ Cuenta creada. Revisa tu correo (o los logs del servidor) por el código.")
-                else:
-                    st.error(res.text)
-
-    with tab3:
-        v_email = st.text_input("Email registrado")
-        v_code = st.text_input("Código de 6 dígitos")
-        if st.button("Verificar"):
-            res = requests.post(f"{BACKEND_URL}/verificar-email", json={"email":v_email, "codigo":v_code})
-            if res.status_code == 200:
-                st.balloons()
-                st.success("¡Verificado! Ahora puedes entrar.")
-            else:
-                st.error("Código incorrecto")
-
-# --- VISTA 2: ONBOARDING (Falta configurar RUC) ---
-elif not st.session_state.config_completa:
-    st.warning("⚠️ ¡Falta un paso! Configura tu empresa para empezar a facturar.")
-    
-    with st.form("setup_form"):
-        st.write("Datos para el SRI:")
-        ruc = st.text_input("RUC de la Empresa")
-        razon = st.text_input("Razón Social")
-        file = st.file_uploader("Firma Electrónica (.p12)", type="p12")
-        clave = st.text_input("Clave de la Firma", type="password")
+        tab_log, tab_reg, tab_ver = st.tabs(["🔐 Ingresar", "📝 Crear Cuenta", "✅ Verificar Email"])
         
-        if st.form_submit_button("Guardar y Validar"):
-            if file:
-                files = {"archivo_firma": (file.name, file, "application/x-pkcs12")}
-                data = {"ruc": ruc, "razon_social": razon, "clave_firma": clave}
-                headers = {"Authorization": f"Bearer {st.session_state.token}"}
-                
-                try:
-                    res = requests.post(f"{BACKEND_URL}/configurar-empresa", data=data, files=files, headers=headers)
-                    if res.status_code == 200:
-                        st.success("¡Todo listo! Recargando...")
-                        st.session_state.config_completa = True
-                        st.session_state.empresa_ruc = ruc # Guardamos el RUC para saber si es admin luego
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error(f"Error: {res.json().get('detail')}")
-                except Exception as e:
-                    st.error(f"Error de conexión: {e}")
+        with tab_log:
+            with st.form("login_form"):
+                email = st.text_input("Email")
+                pw = st.text_input("Contraseña", type="password")
+                if st.form_submit_button("Iniciar Sesión", type="primary"):
+                    do_login(email, pw)
+        
+        with tab_reg:
+            with st.form("reg_form"):
+                n_nom = st.text_input("Nombre Completo")
+                n_em = st.text_input("Email")
+                n_p1 = st.text_input("Contraseña", type="password")
+                if st.form_submit_button("Registrarse"):
+                    try:
+                        res = requests.post(f"{BACKEND_URL}/registrar-usuario", json={"nombre":n_nom, "email":n_em, "password":n_p1})
+                        if res.status_code == 200:
+                            st.success("Cuenta creada. Revisa los logs de EasyPanel para ver el código.")
+                        else:
+                            st.error(res.text)
+                    except Exception as e: st.error(f"Error: {e}")
 
-# --- VISTA 3: PANEL PRINCIPAL (Facturación) ---
+        with tab_ver:
+            st.caption("Usa el código que apareció en los logs del backend.")
+            with st.form("ver_form"):
+                v_em = st.text_input("Email")
+                v_co = st.text_input("Código (6 dígitos)")
+                if st.form_submit_button("Validar Código"):
+                    try:
+                        res = requests.post(f"{BACKEND_URL}/verificar-email", json={"email":v_em, "codigo":v_co})
+                        if res.status_code == 200:
+                            st.balloons()
+                            st.success("¡Verificado! Ya puedes iniciar sesión.")
+                        else: st.error("Código incorrecto")
+                    except: st.error("Error conexión")
+
+# --- ESCENA 2: DENTRO DEL SISTEMA (Si hay token) ---
 else:
-    # BARRA LATERAL
-    with st.sidebar:
-        st.write("🟢 Sesión Activa")
+    # --- HEADER / BARRA SUPERIOR ---
+    col_h1, col_h2 = st.columns([8, 2])
+    with col_h1: st.title("📊 Panel de Control")
+    with col_h2: 
         if st.button("Cerrar Sesión"):
             st.session_state.token = None
             st.rerun()
-        
-        st.markdown("---")
-        
-        # --- PANEL DE ADMIN (SOLO VISIBLE SI ERES TÚ) ---
-        # Nota: Como el RUC se carga al login, asegúrate de que al configurar tu empresa uses el RUC_ADMIN
-        # O añade un endpoint /me para traer el RUC siempre.
-        # Por simplicidad, aquí ponemos el formulario siempre visible para ti si sabes el truco,
-        # o puedes ocultarlo con un checkbox.
-        
-        with st.expander("Panel Admin (Recargas)"):
-            c_ruc = st.text_input("RUC Cliente")
-            c_cant = st.number_input("Cantidad", value=250, step=50)
-            if st.button("💰 Recargar Saldo"):
-                recargar_saldo_admin(c_ruc, c_cant)
 
-    st.title("Emitir Factura")
+    # --- BARRA DE ADVERTENCIA / ONBOARDING ---
+    # Esto solo aparece si el usuario es nuevo y no ha subido su firma
+    if not st.session_state.config_completa:
+        st.warning("⚠️ **Perfil Incompleto:** Necesitas configurar tu RUC y Firma para empezar.")
+        
+        with st.expander("🚀 CONFIGURAR MI EMPRESA (Paso Único)", expanded=True):
+            col_a, col_b = st.columns(2)
+            
+            with col_a:
+                st.subheader("1. Datos del SRI")
+                ruc_search = st.text_input("Ingresa tu RUC", max_chars=13, placeholder="17xxxxxxxx001")
+                
+                # Variables para autocompletar
+                razon_social_val = ""
+                
+                if st.button("🔍 Buscar Datos en SRI"):
+                    if len(ruc_search) == 13:
+                        with st.spinner("Conectando con SRI..."):
+                            datos = consultar_ruc_api(ruc_search)
+                            if datos and datos['valido']:
+                                st.session_state.datos_sri_temp = datos
+                                st.toast("✅ Datos encontrados", icon="🎉")
+                            else:
+                                st.error("❌ RUC no encontrado o inválido.")
+                                st.session_state.datos_sri_temp = {}
+
+                # Mostrar datos si existen en memoria
+                if st.session_state.datos_sri_temp:
+                    d = st.session_state.datos_sri_temp
+                    razon_social_val = d.get('razon_social', '')
+                    st.info(f"**Nombre:** {razon_social_val}")
+                    if d.get('estado') != "ACTIVO":
+                        st.error(f"⚠️ Estado Contribuyente: {d.get('estado')}")
+
+                # Inputs finales (El usuario puede editarlos si quiere)
+                final_razon = st.text_input("Razón Social", value=razon_social_val)
+                # El SRI no siempre da la dirección, así que la pedimos
+                final_dir = st.text_input("Dirección Matriz", placeholder="Ej: Av. Amazonas y ONU")
+
+            with col_b:
+                st.subheader("2. Firma Electrónica")
+                uploaded_file = st.file_uploader("Archivo .p12", type="p12")
+                uploaded_pass = st.text_input("Contraseña del .p12", type="password")
+
+            st.markdown("---")
+            if st.button("💾 Guardar y Activar Facturación", type="primary"):
+                if ruc_search and final_razon and uploaded_file and uploaded_pass:
+                    files = {"archivo_firma": (uploaded_file.name, uploaded_file, "application/x-pkcs12")}
+                    data = {"ruc": ruc_search, "razon_social": final_razon, "clave_firma": uploaded_pass}
+                    headers = {"Authorization": f"Bearer {st.session_state.token}"}
+                    
+                    with st.spinner("Validando firma criptográfica..."):
+                        try:
+                            res = requests.post(f"{BACKEND_URL}/configurar-empresa", data=data, files=files, headers=headers)
+                            if res.status_code == 200:
+                                st.balloons()
+                                st.success("¡Perfil Activado! El sistema se recargará...")
+                                st.session_state.config_completa = True
+                                st.session_state.empresa_ruc = ruc_search # Actualizamos RUC
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error(f"Error: {res.json().get('detail')}")
+                        except Exception as e: st.error(f"Error crítico: {e}")
+                else:
+                    st.warning("Por favor completa todos los campos obligatorios.")
+
+    # --- DASHBOARD (Siempre visible) ---
+    st.markdown("---")
     
-    # FORMULARIO DE FACTURA
+    # Métricas Ficticias (Para enamorar al usuario)
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("Facturas Hoy", "0")
+    m2.metric("Ventas Mes", "$0.00")
+    m3.metric("Clientes", "0") 
+    m4.metric("Créditos", "Consultando...") 
+    
+    # --- ÁREA DE FACTURACIÓN ---
+    st.subheader("📝 Nueva Factura")
+    
+    # Bloqueamos el formulario si no está completo
+    form_disabled = not st.session_state.config_completa
+    if form_disabled:
+        st.info("👆 Debes completar la configuración arriba para desbloquear este formulario.")
+
     with st.form("factura_form"):
         col1, col2 = st.columns(2)
-        fecha_emision = col1.text_input("Fecha Emisión", value="10/12/2025")
-        serie_caja = col2.text_input("Serie (Ej: 001001)", value="001001")
+        # Inputs deshabilitados si form_disabled es True
+        fecha_emision = col1.text_input("Fecha Emisión", value="10/12/2025", disabled=form_disabled)
+        serie_caja = col2.text_input("Serie (Ej: 001001)", value="001001", disabled=form_disabled)
         
         st.markdown("### 👤 Cliente")
-        c_nombre = st.text_input("Razón Social")
+        c_nombre = st.text_input("Razón Social / Nombre", disabled=form_disabled)
         c1, c2 = st.columns(2)
-        c_ident = c1.text_input("Identificación")
-        c_tipo = c2.selectbox("Tipo", ["05", "04", "06", "07"], format_func=lambda x: "Cédula" if x=="05" else "RUC" if x=="04" else "Consumidor Final")
-        c_dir = st.text_input("Dirección", value="S/N")
+        c_ident = c1.text_input("Identificación", disabled=form_disabled)
+        c_tipo = c2.selectbox("Tipo Documento", ["05", "04", "06", "07"], disabled=form_disabled)
+        c_dir = st.text_input("Dirección", value="S/N", disabled=form_disabled)
         
         st.markdown("### 🛒 Detalle")
-        p_desc = st.text_input("Producto", "Servicios Profesionales")
+        p_desc = st.text_input("Descripción", "Servicios Profesionales", disabled=form_disabled)
         col_cant, col_prec = st.columns(2)
-        p_cant = col_cant.number_input("Cantidad", min_value=1.0, value=1.0)
-        p_prec = col_prec.number_input("Precio Unitario", min_value=0.01, value=10.00)
+        p_cant = col_cant.number_input("Cantidad", min_value=1.0, value=1.0, disabled=form_disabled)
+        p_prec = col_prec.number_input("Precio Unitario", min_value=0.01, value=10.00, disabled=form_disabled)
         
+        # Cálculos en tiempo real (Frontend)
         subtotal = p_cant * p_prec
         iva = subtotal * 0.15
         total = subtotal + iva
         
         st.metric("Total a Pagar", f"${total:.2f}")
         
-        if st.form_submit_button("🚀 Emitir Factura"):
-            # Obtenemos el RUC actual (esto es un parche rápido si no tenemos el RUC en sesión)
-            # En producción, usa un endpoint /me para obtener tu propio RUC.
-            mi_ruc_actual = st.session_state.empresa_ruc 
-            # Si es None, intentamos enviarlo así y que el backend valide el token.
+        enviar = st.form_submit_button("🚀 Firmar y Emitir Factura", disabled=form_disabled)
+        
+        if enviar and not form_disabled:
+            # Payload para el backend
+            mi_ruc = st.session_state.empresa_ruc
             
             payload = {
-                "ruc": mi_ruc_actual if mi_ruc_actual else "PENDIENTE", # El backend validará el token
+                # El backend usará el RUC del token, pero enviamos esto por validación Pydantic
+                "ruc": mi_ruc if mi_ruc else "9999999999999", 
                 "ambiente": 1,
                 "serie": serie_caja,
                 "fecha_emision": fecha_emision,
@@ -221,26 +278,29 @@ else:
                 }]
             }
             
-            # Pequeño truco: El backend necesita el RUC en el payload para validar
-            # Pero como tenemos token, el backend puede sacar el RUC del token.
-            # Sin embargo, tu modelo FacturaCompleta Pydantic EXIGE el campo 'ruc'.
-            # Así que necesitamos asegurarnos de enviarlo.
-            # Solución: Haremos que el backend ignore el RUC del payload y use el del Token,
-            # o nos aseguramos de guardarlo en sesión al configurar.
-            
-            # Como st.session_state.empresa_ruc se llena al configurar, debería funcionar.
-            
-            with st.spinner("Firmando..."):
+            with st.spinner("Generando XML y Firmando..."):
                 res = emitir_factura_api(payload)
             
             if res and res.status_code == 200:
                 data = res.json()
-                st.success(f"✅ Factura Generada: {data.get('clave_acceso')}")
+                st.success(f"✅ ¡Factura Exitosa! Clave: {data.get('clave_acceso')}")
                 if "creditos_restantes" in data:
-                    st.toast(f"Te quedan {data['creditos_restantes']} créditos")
-                with st.expander("Ver XML"):
+                    st.toast(f"Saldo restante: {data['creditos_restantes']}", icon="💰")
+                with st.expander("Ver XML Firmado"):
                     st.code(data.get("xml_firmado"), language="xml")
             elif res and res.status_code == 402:
-                st.error("⚠️ Sin saldo. Contacta al admin.")
+                st.error("⚠️ No tienes saldo suficiente. Contacta al administrador.")
             elif res:
                 st.error(f"Error: {res.text}")
+
+    # === PANEL ADMIN SECRETO (Solo visible para ti) ===
+    # Compara el RUC logueado con el RUC_ADMIN que definiste arriba
+    if st.session_state.empresa_ruc == RUC_ADMIN:
+        with st.sidebar:
+            st.markdown("---")
+            st.error("🔐 MODO SUPER ADMIN")
+            with st.expander("Recargar Saldo a Clientes"):
+                a_ruc = st.text_input("RUC Cliente Destino")
+                a_cant = st.number_input("Cantidad a Recargar", value=100)
+                if st.button("Acreditar Saldo"):
+                    recargar_saldo_admin(a_ruc, a_cant)
