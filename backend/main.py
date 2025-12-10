@@ -117,11 +117,15 @@ def login(datos: LoginEmail):
     if user['email_verificado'] == 0:
         raise HTTPException(403, "Debes verificar tu email primero (revisa el código).")
         
-    token = auth.create_access_token({"sub": user['email']})
-    
-    # Devolvemos info extra para saber si ya configuró su empresa
+token = auth.create_access_token({"sub": user['email']})
     tiene_empresa = user['ruc'] is not None
-    return {"access_token": token, "token_type": "bearer", "configuracion_completa": tiene_empresa}
+    
+    return {
+        "access_token": token, 
+        "token_type": "bearer", 
+        "configuracion_completa": tiene_empresa,
+        "ruc_usuario": user['ruc'] 
+    }
 
 @app.post("/configurar-empresa")
 def configurar_empresa(
@@ -191,3 +195,4 @@ def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_us
         }
     except Exception as e:
         raise HTTPException(400, str(e))
+
