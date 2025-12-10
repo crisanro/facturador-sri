@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+mysql-connector-python
+python-multipart
+# Nuevas para seguridad y firma:
+python-jose[cryptography]
+passlib[bcrypt]
+endesive
+cryptography
+lxml
+requests
+asn1crypto
+pyopenssl
