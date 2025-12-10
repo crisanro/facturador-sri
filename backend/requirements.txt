@@ -2,9 +2,9 @@ fastapi
 uvicorn
 mysql-connector-python
 python-multipart
-# Nuevas para seguridad y firma:
 python-jose[cryptography]
 passlib[bcrypt]
+bcrypt==4.0.1
 endesive
 cryptography
 lxml
