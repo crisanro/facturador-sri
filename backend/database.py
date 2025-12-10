@@ -27,15 +27,17 @@ def inicializar_tablas():
     cursor = conn.cursor()
     
     # 1. Tabla EMPRESAS (Clientes)
-    sql_empresas = """
+sql_empresas = """
     CREATE TABLE IF NOT EXISTS empresas (
         id INT AUTO_INCREMENT PRIMARY KEY,
         ruc VARCHAR(13) NOT NULL UNIQUE,
         razon_social VARCHAR(300) NOT NULL,
+        email VARCHAR(255),        -- NUEVO
+        telefono VARCHAR(50),      -- NUEVO
         password_hash VARCHAR(255),
-        firma_path VARCHAR(255),
-        firma_clave VARCHAR(255),
-        creditos INT DEFAULT 10,  -- ¡NUEVO! Les regalamos 10 facturas al registrarse
+        firma_path VARCHAR(255) NULL, -- AHORA PUEDE SER NULL (VACÍO)
+        firma_clave VARCHAR(255) NULL, -- AHORA PUEDE SER NULL
+        creditos INT DEFAULT 10,
         activo BOOLEAN DEFAULT 1
     );
     """
@@ -80,14 +82,32 @@ def inicializar_tablas():
 
 # --- FUNCIONES DE LÓGICA ---
 
-def crear_empresa(ruc, razon_social, path_firma, clave_firma, password_login_hash):
+def crear_empresa(ruc, razon_social, pass_hash, email, telefono):
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
     try:
-        sql = """INSERT INTO empresas (ruc, razon_social, firma_path, firma_clave, password_hash) 
-                 VALUES (%s, %s, %s, %s, %s)"""
-        cursor.execute(sql, (ruc, razon_social, path_firma, clave_firma, password_login_hash))
+        # Al registrarse, firma_path y firma_clave van vacíos (None)
+        sql = """INSERT INTO empresas (ruc, razon_social, password_hash, email, telefono, firma_path, firma_clave) 
+                 VALUES (%s, %s, %s, %s, %s, NULL, NULL)"""
+        cursor.execute(sql, (ruc, razon_social, pass_hash, email, telefono))
+        conn.commit()
+        return True
+    except Error as e:
+        print(f"Error crear empresa: {e}")
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
+# NUEVA FUNCIÓN: ACTUALIZAR FIRMA
+def actualizar_firma_cliente(ruc, path_firma, clave_firma):
+    conn = get_db_connection()
+    if not conn: return False
+    cursor = conn.cursor()
+    try:
+        sql = "UPDATE empresas SET firma_path = %s, firma_clave = %s WHERE ruc = %s"
+        cursor.execute(sql, (path_firma, clave_firma, ruc))
         conn.commit()
         return True
     except Error:
@@ -181,4 +201,5 @@ def recargar_creditos(ruc, cantidad):
         return True
     finally:
         cursor.close()
+
         conn.close()
