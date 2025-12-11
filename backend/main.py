@@ -152,24 +152,19 @@ def verificar_email(datos: VerificarCodigo):
 @app.post("/login")
 def login(datos: LoginEmail):
     
-    # --- 1. CONSULTA CRÍTICA: DEFINIR 'user' ---
-    # Si el usuario no existe, user será None. Si existe, contendrá el diccionario de la BD.
     user = database.buscar_usuario_por_email(datos.email) 
 
     if not user or not auth.verify_password(datos.password, user['password_hash']):
-        # Si el usuario es None o la clave falla, salimos con error 401.
         raise HTTPException(401, "Credenciales incorrectas")
     
     if user['email_verificado'] == 0:
         raise HTTPException(403, "Debes verificar tu email primero.")
         
-    # --- 2. Lógica de API Key: Generar si es NULL ---
-    if user['api_key'] is None:
-        new_key = database.generar_api_key(user['id'])
-        # Actualizamos el diccionario local 'user' para devolver la clave
-        user['api_key'] = new_key 
-        
-    # --- 3. Uso de 'user' (La línea donde estaba el error) ---
+    # --- LÓGICA CORREGIDA ---
+    # 1. Ya no generamos la clave aquí.
+    # 2. Asumimos que la columna 'api_key' existe y puede ser None.
+    api_key_existente = user.get('api_key') 
+    
     tiene_empresa = user['ruc'] is not None
     
     # Generar el JWT para la sesión web
@@ -180,7 +175,7 @@ def login(datos: LoginEmail):
         "token_type": "bearer", 
         "configuracion_completa": tiene_empresa,
         "ruc_usuario": user['ruc'],
-        "api_key_persistente": user['api_key'] # Devolver la clave estática
+        "api_key_persistente": api_key_existente # <-- Devolvemos lo que exista (será None si no se ha generado)
     }
 
 @app.post("/configurar-empresa")
@@ -397,6 +392,21 @@ def historial_facturas(user: dict = Depends(get_current_user)):
     return {"facturas": historial}
 
 
+@app.post("/generar-api-key")
+def generar_nueva_api_key(user: dict = Depends(get_current_user)):
+    """Genera o regenera la API Key persistente para el usuario logueado."""
+    
+    # 1. Requerir que la configuración esté completa antes de dar una API Key
+    if user['ruc'] is None:
+        raise HTTPException(400, "Debe completar la configuración (RUC/Firma) primero.")
+    
+    # 2. Generar la clave en la BD
+    new_key = database.generar_api_key(user['id'])
+    
+    if new_key:
+        return {"mensaje": "API Key generada exitosamente.", "api_key": new_key}
+    
+    raise HTTPException(500, "Error al guardar la nueva clave en la base de datos.")
 
 
 
