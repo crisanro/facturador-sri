@@ -215,44 +215,28 @@ def emitir_factura(factura: FacturaCompleta,
                    background_tasks: BackgroundTasks, 
                    user: dict = Depends(get_current_user_api_key)):
     
-    # ... (código de RUC, secuencial, clave, xml_crudo, xml_firmado se mantiene) ...
+    # ... (Chequeos iniciales) ...
 
     try:
+        # 1. Obtener secuencial y ajustar la factura (OBLIGATORIO)
         secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
-        # ... (resto de lógica de clave y firma) ...
+        factura.secuencial = secuencial
+        factura.ruc = user['ruc'] # Usamos el RUC del usuario autenticado
+        
+        # 2. Generar CLAVE de Acceso (OBLIGATORIO)
+        clave = utils_sri.generar_clave_acceso(
+            factura.fecha_emision, "01", factura.ruc, factura.ambiente, 
+            factura.serie, factura.secuencial, "12345678"
+        )
+        
+        # 3. Generar XML CRUDO (OBLIGATORIO - ¡LA LÍNEA QUE FALTABA!)
+        xml_crudo = xml_builder.crear_xml_factura(factura, clave)
+        
+        # 4. Firmar XML (Ahora sí usa las variables definidas)
         xml_firmado = firmador.firmar_xml(xml_crudo, user['firma_path'], user['firma_clave'])
         
-        # --- LÓGICA DE ENVÍO ASÍNCRONO AL SRI ---
+        # ... (resto de la lógica de envío asíncrono al SRI) ...
         
-        # 1. Enviar el comprobante a RECEPCIÓN
-        envio_resultado = sri_service.enviar_comprobante(xml_firmado, factura.ambiente)
-        
-        if envio_resultado['estado'] == 'RECIBIDA':
-            
-            # 2. Guardar en DB inmediatamente con estado 'RECIBIDA' y descontar crédito
-            database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, "RECIBIDA")
-            database.descontar_credito(user['id'])
-
-            # 3. Delegar la consulta de autorización a una tarea de fondo (Polling)
-            background_tasks.add_task(sri_service.consultar_y_actualizar_autorizacion, clave, factura.ambiente)
-
-            # 4. Devolver respuesta INMEDIATA al usuario (sin esperar)
-            return {
-                "estado": "RECIBIDA", 
-                "clave_acceso": clave,
-                "mensaje": "Comprobante recibido. El estado final se actualizará en 5-30 segundos."
-            }
-                
-        elif envio_resultado['estado'] == 'DEVUELTA':
-            # Rechazo inmediato (No consume crédito).
-            database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, "DEVUELTA")
-            raise HTTPException(400, f"SRI DEVUELTA (Error de Recepción): {envio_resultado.get('errores', ['Error desconocido'])}")
-            
-        else:
-             # Otro error (conexión, etc.)
-             raise HTTPException(500, f"Error al enviar al SRI: {envio_resultado['mensaje']}")
-
-
     except Exception as e:
         raise HTTPException(400, str(e))
 
@@ -380,6 +364,7 @@ def generar_nueva_api_key(user: dict = Depends(get_current_user)):
         return {"mensaje": "API Key generada exitosamente.", "api_key": new_key}
     
     raise HTTPException(500, "Error al guardar la nueva clave en la base de datos.")
+
 
 
 
