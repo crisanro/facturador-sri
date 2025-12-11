@@ -216,3 +216,14 @@ def recargar_saldo(datos: Recarga):
         return {"mensaje": "Recarga exitosa"}
     else:
         raise HTTPException(404, "Cliente no encontrado")
+
+# --- Agregar esto en backend/main.py ---
+
+@app.get("/consultar-ruc/{ruc}")
+def consultar_ruc_endpoint(ruc: str):
+    # Llamamos a la función que conecta con el SRI
+    datos = utils_sri.consultar_datos_ruc_sri(ruc)
+    
+    # Si devuelve error, igual respondemos 200 pero con valido=False
+    # para que el frontend muestre el mensaje bonito en rojo
+    return datos
