@@ -89,6 +89,7 @@ def consultar_saldo_api(token_a_usar):
             # Actualiza los datos de la sesión (esencial para la persistencia)
             st.session_state.config_completa = data.get("ruc_usuario") is not None
             st.session_state.empresa_ruc = data.get("ruc_usuario")
+            st.session_state.api_key = data.get("api_key_persistente") # <-- ASEGURAR ESTO
             return data
         return None
     except:
@@ -627,6 +628,7 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
 
 
 
