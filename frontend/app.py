@@ -41,19 +41,37 @@ if 'datos_sri_temp' not in st.session_state: st.session_state.datos_sri_temp = {
 # [ Mantener do_login, consultar_ruc_api, recargar_saldo_admin, emitir_factura_api ]
 # ******************************************************************************
 
+# En app.py
+
 def do_login(email, password):
-    """Inicia sesión y guarda el token y estado del usuario"""
+    """Inicia sesión y guarda el token y estado del usuario"""   
     try:
         res = requests.post(f"{BACKEND_URL}/login", json={"email": email, "password": password})
-        # La línea del IF (línea 48) debe estar correctamente indentada
-        if res.status_code == 200: 
+     
+        if res.status_code == 200:
             data = res.json()
+            
+            # --- GUARDADO DE VARIABLES DE SESIÓN (CRÍTICO) ---
             st.session_state.token = data["access_token"]
-            # ... (el resto del código de sesión) ...
-        # ... (el resto del manejo de errores 403, 401) ...
+            st.session_state.config_completa = data["configuracion_completa"]
+            st.session_state.empresa_ruc = data.get("ruc_usuario")
+            st.session_state.api_key = data.get("api_key_persistente") # Guardamos la clave estática
+            # --------------------------------------------------
+            
+            st.success("✅ ¡Inicio de sesión exitoso! Redirigiendo al panel...")
+            time.sleep(1) # Esperamos 1 segundo para asegurar la actualización del estado
+            st.rerun() 
+            
+        elif res.status_code == 403:
+            st.error("⚠️ Tu email no ha sido verificado. Revisa los logs por el código.")
+        
+        else: # Maneja el 401 Unauthorized y otros errores
+            st.error("❌ Credenciales incorrectas o RUC no asociado a esta cuenta.")
+            
     except Exception as e:
-        st.error(f"No hay conexión con el Backend: {e}")
+        st.error(f"❌ No hay conexión con el Backend: {e}")
 
+# La función consultar_ruc_api se mantiene igual si no hay cambios:
 def consultar_ruc_api(ruc):
     """Consulta al backend, quien a su vez consulta al SRI"""
     try:
@@ -434,6 +452,7 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
 
 
 
