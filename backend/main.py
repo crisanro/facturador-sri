@@ -6,6 +6,7 @@ import shutil
 import os
 import random
 from contextlib import asynccontextmanager
+import stripe_service
 
 # Importamos nuestros módulos locales
 import utils_sri, xml_builder, database, auth, firmador
@@ -243,3 +244,46 @@ def consultar_saldo(user: dict = Depends(get_current_user)):
         "creditos_disponibles": user.get('creditos', 0),
         "ruc_empresa": user.get('ruc')
     }
+
+class CompraCreditos(BaseModel):
+    # La cantidad de facturas que quiere comprar (ej. 50, 100)
+    cantidad: int 
+
+# --- ENDPOINTS DE STRIPE ---
+
+@app.post("/comprar-facturas")
+def comprar_creditos(datos: CompraCreditos, user: dict = Depends(get_current_user)):
+    """
+    Genera la URL de Checkout de Stripe para el pago.
+    """
+    if not user['ruc']: 
+        raise HTTPException(400, "Falta configurar empresa para comprar créditos.")
+        
+    checkout_url = stripe_service.crear_sesion_checkout(
+        user['id'], 
+        user['ruc'], 
+        datos.cantidad
+    )
+    
+    if checkout_url:
+        return {"mensaje": "Redirigiendo a Stripe", "checkout_url": checkout_url}
+    
+    raise HTTPException(500, "Error al generar sesión de pago.")
+
+@app.post("/stripe-webhook")
+async def stripe_webhook(request: Request):
+    """
+    Endpoint secreto para que Stripe nos notifique de pagos exitosos.
+    """
+    # 1. Obtener los datos sin parsear
+    payload = await request.body()
+    sig_header = request.headers.get('stripe-signature')
+    
+    # 2. Tu secreto de Webhook (OBTENIDO DESDE TU DASHBOARD DE STRIPE)
+    webhook_secret = os.getenv("STRIPE_WEBHOOK_SECRET", "whsec_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
+    
+    # 3. Procesar el evento y recargar
+    response, status_code = stripe_service.procesar_webhook(payload, sig_header, webhook_secret)
+    
+    return Response(content=response, status_code=status_code)
+
