@@ -1,5 +1,5 @@
 streamlit
 requests
 pandas
-streamlit-cookies
-
+streamlit-extras
+extra-streamlit-components
