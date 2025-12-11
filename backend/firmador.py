@@ -152,6 +152,7 @@ def validar_archivo_p12(ruta_p12, password, ruc_usuario):
 def firmar_xml(xml_string, ruta_p12, password_p12):
     """
     Firma un XML con XAdES-BES compatible con SRI Ecuador.
+    NUEVA ESTRATEGIA: Intenta con TODOS los certificados válidos.
     """
     try:
         with open(ruta_p12, 'rb') as f:
@@ -163,10 +164,72 @@ def firmar_xml(xml_string, ruta_p12, password_p12):
             backend=default_backend()
         )
         
-        certificate = encontrar_certificado_valido(certificate_principal, additional_certificates)
+        # NUEVA ESTRATEGIA: Buscar TODOS los certificados válidos
+        todos_los_certs = []
+        if certificate_principal:
+            todos_los_certs.append(certificate_principal)
+        if additional_certificates:
+            todos_los_certs.extend(additional_certificates)
         
-        if certificate is None:
-            raise Exception("No se encontró un certificado válido en el P12.")
+        print(f"[FIRMA] Total de certificados en P12: {len(todos_los_certs)}")
+        
+        # Buscar todos los candidatos válidos
+        now = datetime.datetime.now(timezone.utc)
+        candidatos = []
+        
+        for idx, cert in enumerate(todos_los_certs, 1):
+            try:
+                inicio = cert.not_valid_before_utc
+                fin = cert.not_valid_after_utc
+                
+                # Verificar vigencia
+                if not (inicio <= now <= fin):
+                    continue
+                
+                # Ignorar CAs
+                try:
+                    bc = cert.extensions.get_extension_for_oid(ExtensionOID.BASIC_CONSTRAINTS)
+                    if bc.value.ca:
+                        continue
+                except:
+                    pass
+                
+                # Verificar digital signature
+                try:
+                    ku = cert.extensions.get_extension_for_oid(ExtensionOID.KEY_USAGE)
+                    if not ku.value.digital_signature:
+                        continue
+                except:
+                    pass
+                
+                # Debe tener serial number
+                try:
+                    sn = cert.subject.get_attributes_for_oid(NameOID.SERIAL_NUMBER)
+                    if not sn:
+                        continue
+                except:
+                    continue
+                
+                candidatos.append((cert, fin))
+                print(f"[FIRMA] Candidato {len(candidatos)}: Expira {fin.strftime('%Y-%m-%d')}")
+            except:
+                continue
+        
+        if not candidatos:
+            raise Exception("No se encontró ningún certificado válido en el P12.")
+        
+        # Ordenar por fecha (más nuevo primero)
+        candidatos.sort(key=lambda x: x[1], reverse=True)
+        
+        # USAR EL MÁS NUEVO
+        certificate = candidatos[0][0]
+        
+        try:
+            cn = certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+            print(f"[FIRMA] ✅ Usando certificado: {cn}")
+            print(f"[FIRMA]    Expira: {candidatos[0][1].strftime('%Y-%m-%d')}")
+        except:
+            print(f"[FIRMA] ✅ Usando certificado (expira: {candidatos[0][1].strftime('%Y-%m-%d')})")
         
         try:
             root = etree.fromstring(xml_string.encode('utf-8'))
@@ -335,3 +398,4 @@ def agregar_xades(signature, certificate, sig_id):
     
     serial_num = etree.SubElement(issuer_serial, f"{{{ns_ds}}}X509SerialNumber")
     serial_num.text = str(certificate.serial_number)
+
