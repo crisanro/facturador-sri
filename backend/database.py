@@ -1,6 +1,7 @@
 import mysql.connector
 from mysql.connector import Error
 import os
+import secrets
 
 DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
@@ -34,6 +35,7 @@ def inicializar_tablas():
         telefono VARCHAR(50),
         firma_path VARCHAR(255) NULL,
         firma_clave VARCHAR(255) NULL,
+        api_key VARCHAR(64) NULL UNIQUE,
         creditos INT DEFAULT 10,
         codigo_verificacion VARCHAR(6),
         email_verificado BOOLEAN DEFAULT 0,
@@ -274,6 +276,33 @@ def obtener_monto_total_ganado():
         # Aseguramos que el resultado sea float o 0.0
         return float(res[0]) if res and res[0] else 0.0
     except Error: return 0.0
+    finally:
+        cursor.close()
+        conn.close()
+
+def generar_api_key(empresa_id):
+    """Genera un token largo y aleatorio para el acceso a la API."""
+    # 32 bytes de secreto = 64 caracteres en hexadecimal
+    new_key = secrets.token_hex(32)
+    conn = get_db_connection()
+    if not conn: return None
+    cursor = conn.cursor()
+    try:
+        sql = "UPDATE empresas SET api_key = %s WHERE id = %s"
+        cursor.execute(sql, (new_key, empresa_id))
+        conn.commit()
+        return new_key
+    except Error: return None
+    finally: cursor.close(); conn.close()
+
+def buscar_usuario_por_api_key(api_key):
+    """Busca el usuario completo por la API Key (para el header de facturación)."""
+    conn = get_db_connection()
+    if not conn: return None
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT * FROM empresas WHERE api_key = %s", (api_key,))
+        return cursor.fetchone()
     finally:
         cursor.close()
         conn.close()
