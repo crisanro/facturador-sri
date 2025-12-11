@@ -15,8 +15,11 @@ TOKEN_EXPIRY_DAYS = 7
 
 st.set_page_config(page_title="Facturación SaaS", page_icon="🧾", layout="wide")
 
-# Inicializar el gestor de cookies ANTES de usar st.session_state
+# Inicializar el gestor de cookies
 cookie_manager = CookieManager()
+
+# CRÍTICO: Esperar a que las cookies se carguen
+cookies = cookie_manager.get_all()
 
 # --- 2. ESTILOS CSS PARA QUE SE VEA PROFESIONAL ---
 st.markdown("""
@@ -37,13 +40,28 @@ st.markdown("""
 
 # --- 3. GESTIÓN DE ESTADO (SESIÓN) ---
 # Lógica clave: Intenta obtener el token de la cookie si no está en la sesión
-if 'token' not in st.session_state: 
-    st.session_state.token = cookie_manager.get(TOKEN_COOKIE_KEY)
+# --- GESTIÓN DE ESTADO (SESIÓN) - CORREGIDA ---
+# Intentar obtener el token de la cookie si no está en la sesión
+if 'token' not in st.session_state or st.session_state.token is None:
+    token_from_cookie = cookie_manager.get(TOKEN_COOKIE_KEY)
+    if token_from_cookie and token_from_cookie != "":
+        st.session_state.token = token_from_cookie
+    else:
+        st.session_state.token = None
 
-if 'config_completa' not in st.session_state: st.session_state.config_completa = False
-if 'empresa_ruc' not in st.session_state: st.session_state.empresa_ruc = None
-if 'api_key' not in st.session_state: st.session_state.api_key = None
-if 'datos_sri_temp' not in st.session_state: st.session_state.datos_sri_temp = {}
+# Inicializar otras variables de sesión
+if 'config_completa' not in st.session_state: 
+    st.session_state.config_completa = False
+if 'empresa_ruc' not in st.session_state: 
+    st.session_state.empresa_ruc = None
+if 'api_key' not in st.session_state: 
+    st.session_state.api_key = None
+if 'datos_sri_temp' not in st.session_state: 
+    st.session_state.datos_sri_temp = {}
+
+# Variable para controlar la carga inicial
+if 'initial_load_done' not in st.session_state:
+    st.session_state.initial_load_done = False
 
 
 # --- 4. FUNCIONES DE CONEXIÓN AL BACKEND (Corregidas para el token) ---
@@ -593,3 +611,4 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
