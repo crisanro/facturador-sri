@@ -22,41 +22,34 @@ def inicializar_tablas():
     if conn is None: return
     cursor = conn.cursor()
     
-    # MODIFICAMOS LA TABLA PARA EL NUEVO FLUJO
-    # 1. RUC ahora puede ser NULL al inicio.
-    # 2. Email es UNIQUE (nadie puede registrarse con el mismo correo).
-    # 3. Agregamos 'codigo_verificacion' y 'email_verificado'.
-    
+    # Tabla Empresas (sin cambios)
     sql_empresas = """
     CREATE TABLE IF NOT EXISTS empresas (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        email VARCHAR(255) NOT NULL UNIQUE,  -- Login principal
-        password_hash VARCHAR(255) NOT NULL, -- Contraseña encriptada
-        nombre_usuario VARCHAR(150),         -- Nombre de la persona (ej: Juan)
-        
-        -- DATOS DE EMPRESA (Se llenan después)
-        ruc VARCHAR(13) NULL UNIQUE,         
+        email VARCHAR(255) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL,
+        nombre_usuario VARCHAR(150),
+        ruc VARCHAR(13) NULL UNIQUE,
         razon_social VARCHAR(300) NULL,
         telefono VARCHAR(50),
-        
-        -- DATOS DE FIRMA (Se llenan después)
         firma_path VARCHAR(255) NULL,
         firma_clave VARCHAR(255) NULL,
-        
-        -- DATOS DE CONTROL
         creditos INT DEFAULT 10,
-        codigo_verificacion VARCHAR(6),      -- El código de seguridad que pediste
-        email_verificado BOOLEAN DEFAULT 0,  -- 0 = No, 1 = Si
+        codigo_verificacion VARCHAR(6),
+        email_verificado BOOLEAN DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """
     
-    # ... (Tablas puntos_emision y comprobantes quedan igual que antes) ...
-    # Asegúrate de copiar las definiciones de sql_puntos y sql_comprobantes del código anterior aquí.
-    # ...
+    # Tablas existentes
+    sql_puntos = """
+    CREATE TABLE IF NOT EXISTS puntos_emision (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT, serie VARCHAR(6) NOT NULL, ultimo_secuencial INT DEFAULT 0, FOREIGN KEY (empresa_id) REFERENCES empresas(id), UNIQUE(empresa_id, serie));
+    """
+    sql_comprobantes = """
+    CREATE TABLE IF NOT EXISTS comprobantes (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT, clave_acceso VARCHAR(49) NOT NULL UNIQUE, tipo_comprobante VARCHAR(2) NOT NULL, xml_generado LONGTEXT, estado VARCHAR(20) DEFAULT 'CREADO', fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (empresa_id) REFERENCES empresas(id));
+    """
     
-    sql_puntos = """CREATE TABLE IF NOT EXISTS puntos_emision (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT, serie VARCHAR(6) NOT NULL, ultimo_secuencial INT DEFAULT 0, FOREIGN KEY (empresa_id) REFERENCES empresas(id), UNIQUE(empresa_id, serie));"""
-    sql_comprobantes = """CREATE TABLE IF NOT EXISTS comprobantes (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT, clave_acceso VARCHAR(49) NOT NULL UNIQUE, tipo_comprobante VARCHAR(2) NOT NULL, xml_generado LONGTEXT, estado VARCHAR(20) DEFAULT 'CREADO', fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (empresa_id) REFERENCES empresas(id));"""
+    # TABLA DE TRANSACCIONES (PARA STRPPE)
     sql_transacciones = """
     CREATE TABLE IF NOT EXISTS transacciones (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -69,10 +62,14 @@ def inicializar_tablas():
         FOREIGN KEY (empresa_id) REFERENCES empresas(id)
     );
     """
+
     try:
         cursor.execute(sql_empresas)
         cursor.execute(sql_puntos)
         cursor.execute(sql_comprobantes)
+        # !!! NUEVO: EJECUTAR LA CREACIÓN DE LA TABLA TRANSACCIONES !!!
+        cursor.execute(sql_transacciones) 
+        
         conn.commit()
         print("✅ Base de datos actualizada para registro por Email.")
     except Error as e:
@@ -81,9 +78,10 @@ def inicializar_tablas():
         cursor.close()
         conn.close()
 
-# --- NUEVAS FUNCIONES ---
+# --- FUNCIONES DE AUTENTICACIÓN Y CONFIGURACIÓN (MANTENEMOS IGUAL) ---
 
 def registrar_usuario_inicial(nombre, email, pass_hash, codigo_verificacion):
+# ... (Función existente) ...
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
@@ -101,21 +99,21 @@ def registrar_usuario_inicial(nombre, email, pass_hash, codigo_verificacion):
         conn.close()
 
 def verificar_codigo_email(email, codigo):
+# ... (Función existente) ...
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
     try:
-        # Busca si coincide el código
         sql = "UPDATE empresas SET email_verificado = 1 WHERE email = %s AND codigo_verificacion = %s"
         cursor.execute(sql, (email, codigo))
         conn.commit()
-        return cursor.rowcount > 0 # Devuelve True si se actualizó (código correcto)
+        return cursor.rowcount > 0 
     finally:
         cursor.close()
         conn.close()
 
 def buscar_usuario_por_email(email):
-    """Usada para el Login"""
+# ... (Función existente) ...
     conn = get_db_connection()
     if not conn: return None
     cursor = conn.cursor(dictionary=True)
@@ -127,7 +125,7 @@ def buscar_usuario_por_email(email):
         conn.close()
 
 def buscar_empresa_por_ruc(ruc):
-    """Usada para validar que no se repita el RUC al configurar"""
+# ... (Función existente) ...
     conn = get_db_connection()
     if not conn: return None
     cursor = conn.cursor(dictionary=True)
@@ -139,7 +137,7 @@ def buscar_empresa_por_ruc(ruc):
         conn.close()
 
 def completar_datos_empresa(email_usuario, ruc, razon_social, path_firma, clave_firma):
-    """Este es el paso 2: Cuando ya sube la firma y el RUC"""
+# ... (Función existente) ...
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
@@ -156,8 +154,10 @@ def completar_datos_empresa(email_usuario, ruc, razon_social, path_firma, clave_
         cursor.close()
         conn.close()
 
-# ... (Mantén las funciones de obtener_siguiente_secuencial, guardar_factura_bd, etc.) ...
+# --- FUNCIONES DE FACTURACIÓN (MANTENEMOS IGUAL) ---
+
 def obtener_siguiente_secuencial(empresa_id, serie):
+# ... (Función existente) ...
     conn = get_db_connection()
     if not conn: return None
     cursor = conn.cursor()
@@ -176,19 +176,21 @@ def obtener_siguiente_secuencial(empresa_id, serie):
     except Error: return None
     finally: cursor.close(); conn.close()
 
-def guardar_factura_bd(empresa_id, clave, tipo, xml):
+# MODIFICACIÓN: Aceptar el estado del SRI para guardarlo
+def guardar_factura_bd(empresa_id, clave, tipo, xml, estado_sri="CREADO"): 
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
     try:
-        sql = "INSERT INTO comprobantes (empresa_id, clave_acceso, tipo_comprobante, xml_generado) VALUES (%s, %s, %s, %s)"
-        cursor.execute(sql, (empresa_id, clave, tipo, xml))
+        sql = "INSERT INTO comprobantes (empresa_id, clave_acceso, tipo_comprobante, xml_generado, estado) VALUES (%s, %s, %s, %s, %s)"
+        cursor.execute(sql, (empresa_id, clave, tipo, xml, estado_sri))
         conn.commit()
         return True
     except Error: return False
     finally: cursor.close(); conn.close()
 
 def descontar_credito(empresa_id):
+# ... (Función existente) ...
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
@@ -200,16 +202,78 @@ def descontar_credito(empresa_id):
     except Error: return False
     finally: cursor.close(); conn.close()
 
-def recargar_creditos(ruc, cantidad):
+
+# --- FUNCIONES DE MONETIZACIÓN (PASO B Y C) ---
+
+# MODIFICACIÓN CRÍTICA: Reemplaza la antigua recargar_creditos
+def registrar_recarga_y_aumentar_creditos(ruc, cantidad, monto_usd, referencia_pago): 
+    """Registra la transacción en la tabla 'transacciones' y aumenta los créditos."""
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
     try:
-        sql = "UPDATE empresas SET creditos = creditos + %s WHERE ruc = %s"
-        cursor.execute(sql, (cantidad, ruc))
+        # 1. Obtener ID de la empresa
+        cursor.execute("SELECT id FROM empresas WHERE ruc = %s", (ruc,))
+        res = cursor.fetchone()
+        if not res: return False
+        empresa_id = res[0]
+        
+        # 2. Aumentar créditos
+        sql_update = "UPDATE empresas SET creditos = creditos + %s WHERE id = %s"
+        cursor.execute(sql_update, (cantidad, empresa_id))
+        
+        # 3. Registrar la transacción
+        sql_insert = """INSERT INTO transacciones (empresa_id, monto_usd, creditos_recargados, referencia_pago) 
+                        VALUES (%s, %s, %s, %s)"""
+        cursor.execute(sql_insert, (empresa_id, monto_usd, cantidad, referencia_pago))
+
         conn.commit()
         return True
-    except Error: return False
+    except Error as e: 
+        print(f"Error registrando recarga: {e}")
+        return False
     finally: cursor.close(); conn.close()
 
 
+# NUEVA FUNCIÓN: Historial de Transacciones (para el dashboard del cliente)
+def obtener_historial_transacciones(empresa_id):
+    conn = get_db_connection()
+    if not conn: return []
+    cursor = conn.cursor(dictionary=True)
+    try:
+        cursor.execute("SELECT fecha_creacion, monto_usd, creditos_recargados, estado, referencia_pago FROM transacciones WHERE empresa_id = %s ORDER BY fecha_creacion DESC", (empresa_id,))
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+
+# NUEVA FUNCIÓN: Historial de Comprobantes (para el dashboard del cliente)
+def obtener_historial_comprobantes(empresa_id):
+    conn = get_db_connection()
+    if not conn: return []
+    cursor = conn.cursor(dictionary=True)
+    try:
+        sql = """SELECT clave_acceso, tipo_comprobante, estado, fecha_creacion 
+                 FROM comprobantes 
+                 WHERE empresa_id = %s 
+                 ORDER BY fecha_creacion DESC"""
+        cursor.execute(sql, (empresa_id,))
+        return cursor.fetchall()
+    finally:
+        cursor.close()
+        conn.close()
+        
+# NUEVA FUNCIÓN: Monto Total Ganado (para el dashboard de administración)
+def obtener_monto_total_ganado():
+    conn = get_db_connection()
+    if not conn: return 0.0
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT SUM(monto_usd) FROM transacciones WHERE estado = 'COMPLETADO'")
+        res = cursor.fetchone()
+        # Aseguramos que el resultado sea float o 0.0
+        return float(res[0]) if res and res[0] else 0.0
+    except Error: return 0.0
+    finally:
+        cursor.close()
+        conn.close()
