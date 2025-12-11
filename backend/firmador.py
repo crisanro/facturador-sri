@@ -16,33 +16,37 @@ from typing import List # Asegurar List está importado
 # ============================================================================
 
 def encontrar_certificado_valido(cert_principal, certs_adicionales):
-    """Busca el certificado vigente de usuario en toda la cadena y devuelve el más nuevo."""
+    """
+    Busca el certificado vigente de usuario en toda la cadena y devuelve el más nuevo 
+    (el que expira más tarde).
+    """
     todos_los_certs = []
     if cert_principal:
         todos_los_certs.append(cert_principal)
     if certs_adicionales:
-        # Los certificados adicionales pueden ser CAs o certificados intermedios/antiguos
         todos_los_certs.extend(certs_adicionales)
     
     now = datetime.datetime.now(timezone.utc)
     certificado_vigente_mas_nuevo = None
     
     for cert in todos_los_certs:
-        # Aseguramos que la fecha sea UTC aware (como ya lo hiciste)
-        fecha_fin = cert.not_valid_after
-        if fecha_fin.tzinfo is None:
-            fecha_fin = fecha_fin.replace(tzinfo=timezone.utc)
+        # Usamos el método recomendado (UTC aware)
+        fecha_fin = cert.not_valid_after_utc 
             
-        # Verificar 1) Vigencia Y 2) Que sea un certificado de RUC/Cédula ('2.5.4.5')
-        # La expresión '2.5.4.5' busca el identificador de Cédula/RUC en el sujeto del certificado
+        # 1. Chequeo de Vigencia y Tipo de Certificado
         if now < fecha_fin and '2.5.4.5' in cert.subject.rfc4514_string():
             
-            # Si es el primer certificado válido encontrado O si expira después del actual 'más nuevo'
-            if certificado_vigente_mas_nuevo is None or fecha_fin > certificado_vigente_mas_nuevo.not_valid_after.replace(tzinfo=timezone.utc):
+            # 2. Lógica para determinar si es el más nuevo
+            if certificado_vigente_mas_nuevo is None:
                 certificado_vigente_mas_nuevo = cert
+            else:
+                # CORRECCIÓN: Comparamos fecha_fin (UTC) con el vencimiento del actual más nuevo (también en UTC)
+                fecha_actual_mas_nueva = certificado_vigente_mas_nuevo.not_valid_after_utc
                 
+                if fecha_fin > fecha_actual_mas_nueva:
+                    certificado_vigente_mas_nuevo = cert
+                        
     return certificado_vigente_mas_nuevo
-
 
 def validar_archivo_p12(ruta_p12, password, ruc_usuario):
     """
@@ -282,4 +286,5 @@ def agregar_propiedades_xades_manual(signature, certificate, signature_id):
     
     x509_serial = etree.SubElement(issuer_serial, f"{{{ns_ds}}}X509SerialNumber")
     x509_serial.text = str(certificate.serial_number)
+
 
