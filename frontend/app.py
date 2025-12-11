@@ -301,100 +301,29 @@ def show_compras():
     # ... (El resto del código de historial de compras se mantiene) ...
 
 
-def show_facturacion_form():
-    st.subheader("📝 Nueva Factura")
+def show_api_key():
+    st.subheader("🔑 Token de Autorización (API Key)")
+    st.markdown("Este Token se usa para autenticar todas las llamadas a nuestra API, incluyendo la generación de facturas desde sistemas externos (ERP).")
     
-    form_disabled = not st.session_state.config_completa
-    if form_disabled:
-        st.info("👆 Debes completar la configuración para desbloquear este formulario.")
-
-    with st.form("factura_form"):
-        # --- Datos del Emisor y Serie ---
-        col1, col2 = st.columns(2)
-        fecha_emision = col1.text_input("Fecha Emisión (DD/MM/AAAA)", value="10/12/2025", disabled=form_disabled)
-        serie_caja = col2.text_input("Serie (Ej: 001001)", value="001001", disabled=form_disabled)
-        
-        # --- Datos del Cliente ---
-        st.markdown("### 👤 Cliente")
-        c_nombre = st.text_input("Razón Social / Nombre", disabled=form_disabled)
-        c1, c2 = st.columns(2)
-        c_ident = c1.text_input("Identificación", disabled=form_disabled)
-        c_tipo = c2.selectbox("Tipo Documento", ["05 - Cédula", "04 - RUC", "06 - Pasaporte", "07 - Consumidor Final"], disabled=form_disabled)
-        c_dir = st.text_input("Dirección", value="S/N", disabled=form_disabled)
-        
-        # Extraer el código del tipo de documento
-        c_tipo_codigo = c_tipo.split(" ")[0]
-        
-        # --- Detalle y Cálculos ---
-        st.markdown("### 🛒 Detalle")
-        p_desc = st.text_input("Descripción", "Servicios Profesionales", disabled=form_disabled)
-        col_cant, col_prec = st.columns(2)
-        p_cant = col_cant.number_input("Cantidad", min_value=1.0, value=1.0, disabled=form_disabled)
-        p_prec = col_prec.number_input("Precio Unitario", min_value=0.01, value=10.00, disabled=form_disabled)
-        
-        # Cálculos
-        subtotal = p_cant * p_prec
-        iva = round(subtotal * IVA_RATE, 2)
-        total = round(subtotal + iva, 2)
-        
-        st.metric(f"Total a Pagar (Incluye {IVA_RATE*100:.0f}% IVA)", f"${total:.2f}")
-        
-        enviar = st.form_submit_button("🚀 Firmar y Emitir Factura", disabled=form_disabled)
-        
-        if enviar and not form_disabled:
-            # Validaciones mínimas
-            if not c_nombre or not c_ident or len(c_ident) < 5:
-                st.error("Por favor, completa los datos del cliente correctamente.")
-                st.stop()
-                
-            mi_ruc = st.session_state.empresa_ruc
-            
-            payload = {
-                "ruc": mi_ruc if mi_ruc else "9999999999999", 
-                "ambiente": 1, # Usar ambiente 2 para producción
-                "serie": serie_caja,
-                "fecha_emision": fecha_emision,
-                "razon_social_emisor": "MI EMPRESA", # Debería venir de la BD
-                "direccion_matriz": "Matriz", # Debería venir de la BD
-                "direccion_establecimiento": "Sucursal", # Debería venir de la BD
-                "obligado_contabilidad": "NO",
-                "tipo_identificacion_comprador": c_tipo_codigo,
-                "razon_social_comprador": c_nombre,
-                "identificacion_comprador": c_ident,
-                "direccion_comprador": c_dir,
-                "total_sin_impuestos": subtotal,
-                "total_descuento": 0,
-                "importe_total": total,
-                "detalles": [{
-                    "codigo_principal": "IT-01", "descripcion": p_desc, 
-                    "cantidad": p_cant, "precio_unitario": p_prec, 
-                    "descuento": 0, "precio_total_sin_impuesto": subtotal,
-                    "base_imponible": subtotal, "valor_impuesto": iva,
-                    "codigo_impuesto": "2", "codigo_porcentaje": "4", "tarifa": IVA_RATE*100
-                }],
-                "total_impuestos": [{
-                    "codigo": "2", "codigo_porcentaje": "4", 
-                    "base_imponible": subtotal, "valor": iva
-                }]
-            }
-            
-            with st.spinner("Generando XML, Firmando y Enviando al SRI..."):
-                res = emitir_factura_api(payload)
-            
-            if res and res.status_code == 200:
-                data = res.json()
-                st.success(f"✅ ¡Factura Enviada! Clave: {data.get('clave_acceso')}. Estado: {data.get('estado')}")
-                st.toast(f"Saldo restante: {data.get('creditos_restantes')}", icon="💰")
-                # st.rerun() # Para actualizar métricas
-            elif res and res.status_code == 402:
-                st.error("⚠️ No tienes saldo suficiente. Por favor, compra más créditos.")
-            elif res:
-                error_detail = res.json().get('detail', res.text)
-                st.error(f"Error en la emisión: {error_detail}")
-
+    # 1. Mostrar el Token
+    st.code(st.session_state.token, language="text")
+    
+    # 2. Instrucciones de Uso
+    st.markdown("---")
+    st.markdown("##### ¿Cómo usar este Token?")
+    st.info("Debes incluirlo en el encabezado (Header) de cada solicitud HTTP que envíes a nuestra API:")
+    st.code('Authorization: Bearer [TU_TOKEN_AQUÍ]', language="text")
+    
+    st.markdown("##### Ejemplos de Endpoints Disponibles:")
+    st.markdown("- `POST /emitir-factura`")
+    st.markdown("- `GET /saldo-facturas`")
+    st.markdown("- `GET /historial-facturas`")
+    
+    st.warning("⚠️ **Seguridad:** Mantén este Token seguro. Si sospechas que fue comprometido, cierra la sesión para generar uno nuevo.")
+    
 
 # ==========================================
-#              FLUJO PRINCIPAL
+#              FLUJO PRINCIPAL (Corregido)
 # ==========================================
 
 if not st.session_state.token:
@@ -405,8 +334,8 @@ if not st.session_state.token:
         st.markdown("##### Sistema de Facturación Electrónica SRI")
         
         tab_log, tab_reg, tab_ver = st.tabs(["🔐 Ingresar", "📝 Crear Cuenta", "✅ Verificar Email"])
-        # ... (CÓDIGO DE LOGIN / REGISTRO ORIGINAL SE MANTIENE AQUÍ) ...
         
+        # --- CÓDIGO DE LOGIN / REGISTRO (Se mantiene) ---
         with tab_log:
             with st.form("login_form"):
                 email = st.text_input("Email")
@@ -447,7 +376,7 @@ else:
     
     # --- HEADER / BARRA SUPERIOR ---
     col_h1, col_h2 = st.columns([8, 2])
-    with col_h1: st.title("🧾 Facturador SaaS")
+    with col_h1: st.title("🧾 Portal de Servicios API")
     with col_h2: 
         if st.button("Cerrar Sesión"):
             st.session_state.token = None
@@ -458,13 +387,14 @@ else:
     if not st.session_state.config_completa:
         show_configuracion() 
     else:
-        tab_dash, tab_fact, tab_compras = st.tabs(["📊 Panel General", "📝 Nueva Factura", "💰 Comprar Créditos"])
+        # Renombrado de tabs: Eliminamos 'Nueva Factura' y añadimos 'Mi API Key'
+        tab_dash, tab_api, tab_compras = st.tabs(["📊 Panel General", "🔑 Mi API Key", "💰 Comprar Créditos"])
 
         with tab_dash:
             show_dashboard()
             
-        with tab_fact:
-            show_facturacion_form()
+        with tab_api: # <--- ¡Nueva Pestaña! Muestra el Token de Autenticación
+            show_api_key() 
             
         with tab_compras:
             show_compras()
@@ -476,7 +406,6 @@ else:
             st.error("🔐 MODO SUPER ADMIN")
             # --- Montos Ganados ---
             try:
-                # Este endpoint debe crearlo en el backend si no existe: /admin/montos-ganados
                 res = requests.get(f"{BACKEND_URL}/admin/montos-ganados", headers={"Authorization": f"Bearer {st.session_state.token}"})
                 monto_total = res.json().get('monto_total_usd', 0.0) if res.status_code == 200 else "N/A"
             except:
@@ -490,4 +419,3 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
-
