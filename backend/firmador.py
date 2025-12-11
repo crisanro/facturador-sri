@@ -5,20 +5,22 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography import x509
+from cryptography.x509.oid import NameOID, ExtensionOID
 from lxml import etree
 import base64
 import hashlib
 import uuid
-from typing import List # Asegurar List está importado
+from typing import List
 
 # ============================================================================
-# FUNCIÓN CORREGIDA: ENCONTRAR EL CERTIFICADO VIGENTE MÁS NUEVO
+# FUNCIÓN CORREGIDA: ENCONTRAR EL CERTIFICADO VIGENTE VÁLIDO
 # ============================================================================
 
 def encontrar_certificado_valido(cert_principal, certs_adicionales):
     """
-    Busca el certificado vigente de usuario en toda la cadena y devuelve el más nuevo 
-    (el que expira más tarde).
+    Busca el certificado de usuario válido y vigente para firma electrónica.
+    Prioriza certificados con keyUsage de 'digitalSignature'.
     """
     todos_los_certs = []
     if cert_principal:
@@ -30,57 +32,122 @@ def encontrar_certificado_valido(cert_principal, certs_adicionales):
     certificado_vigente_mas_nuevo = None
     
     for cert in todos_los_certs:
-        # Usamos el método recomendado (UTC aware)
-        fecha_fin = cert.not_valid_after_utc 
+        try:
+            # 1. Verificar vigencia
+            fecha_inicio = cert.not_valid_before_utc
+            fecha_fin = cert.not_valid_after_utc
             
-        # 1. Chequeo de Vigencia y Tipo de Certificado
-        if now < fecha_fin and '2.5.4.5' in cert.subject.rfc4514_string():
+            if not (fecha_inicio <= now <= fecha_fin):
+                print(f"[FIRMA] Certificado expirado o no válido aún: {cert.subject}")
+                continue
             
-            # 2. Lógica para determinar si es el más nuevo
+            # 2. Verificar que sea un certificado de firma (no CA)
+            try:
+                basic_constraints = cert.extensions.get_extension_for_oid(
+                    ExtensionOID.BASIC_CONSTRAINTS
+                )
+                if basic_constraints.value.ca:
+                    print(f"[FIRMA] Certificado CA ignorado: {cert.subject}")
+                    continue
+            except x509.ExtensionNotFound:
+                pass  # No tiene basic constraints, probablemente es end-entity
+            
+            # 3. Verificar Key Usage (debe tener digitalSignature)
+            try:
+                key_usage = cert.extensions.get_extension_for_oid(
+                    ExtensionOID.KEY_USAGE
+                )
+                if not key_usage.value.digital_signature:
+                    print(f"[FIRMA] Certificado sin digitalSignature: {cert.subject}")
+                    continue
+            except x509.ExtensionNotFound:
+                print(f"[FIRMA] Certificado sin Key Usage extension: {cert.subject}")
+                # Algunos certificados antiguos no tienen esta extensión
+                # Los dejamos pasar si cumplen otras condiciones
+            
+            # 4. Verificar que tenga serialNumber en el Subject (persona/empresa)
+            serial_number = None
+            try:
+                serial_number = cert.subject.get_attributes_for_oid(NameOID.SERIAL_NUMBER)
+            except:
+                pass
+            
+            if not serial_number:
+                print(f"[FIRMA] Certificado sin serialNumber en Subject: {cert.subject}")
+                continue
+            
+            print(f"[FIRMA] Certificado válido encontrado: {cert.subject}")
+            print(f"[FIRMA] Válido desde: {fecha_inicio} hasta: {fecha_fin}")
+            
+            # 5. Seleccionar el más nuevo
             if certificado_vigente_mas_nuevo is None:
                 certificado_vigente_mas_nuevo = cert
             else:
-                # CORRECCIÓN: Comparamos fecha_fin (UTC) con el vencimiento del actual más nuevo (también en UTC)
                 fecha_actual_mas_nueva = certificado_vigente_mas_nuevo.not_valid_after_utc
-                
                 if fecha_fin > fecha_actual_mas_nueva:
                     certificado_vigente_mas_nuevo = cert
-                        
+        
+        except Exception as e:
+            print(f"[FIRMA] Error al procesar certificado: {e}")
+            continue
+    
+    if certificado_vigente_mas_nuevo:
+        print(f"[FIRMA] ✓ Certificado seleccionado: {certificado_vigente_mas_nuevo.subject}")
+    else:
+        print(f"[FIRMA] ✗ No se encontró ningún certificado válido")
+    
     return certificado_vigente_mas_nuevo
+
 
 def validar_archivo_p12(ruta_p12, password, ruc_usuario):
     """
-    VALIDACIÓN SIMPLIFICADA: Solo verifica la contraseña y la vigencia.
-    Ahora utiliza la lógica de selección de certificado más nuevo.
+    VALIDACIÓN MEJORADA: Verifica contraseña, vigencia y tipo de certificado.
     """
     try:
         with open(ruta_p12, 'rb') as f:
             p12_data = f.read()
         
-        private_key, certificate_principal, additional_certificates = pkcs12.load_key_and_certificates(
-            p12_data, 
-            password.encode('utf-8')
-        )
+        try:
+            private_key, certificate_principal, additional_certificates = pkcs12.load_key_and_certificates(
+                p12_data, 
+                password.encode('utf-8'),
+                backend=default_backend()
+            )
+        except ValueError as ve:
+            return False, "Contraseña de la firma incorrecta."
         
-        # Usamos la nueva lógica de selección
+        # Buscar certificado válido
         user_cert = encontrar_certificado_valido(certificate_principal, additional_certificates)
         
         if user_cert is None:
-            return False, "El archivo P12 es válido, pero no se encontró un certificado vigente de usuario."
+            return False, "No se encontró un certificado de firma electrónica vigente en el archivo P12."
         
-        # Las verificaciones de expiración se hacen implícitamente en encontrar_certificado_valido,
-        # pero mantenemos la verificación de la fecha del certificado seleccionado para logs.
+        # Verificar que el RUC/CI coincida con el certificado
+        try:
+            serial_attrs = user_cert.subject.get_attributes_for_oid(NameOID.SERIAL_NUMBER)
+            if serial_attrs:
+                cert_serial = serial_attrs[0].value
+                # Limpiar el serial del certificado (puede tener prefijos)
+                cert_serial_clean = cert_serial.replace('-', '').replace(' ', '')
+                ruc_clean = ruc_usuario.replace('-', '').replace(' ', '')
+                
+                if ruc_clean not in cert_serial_clean:
+                    return False, f"El RUC/CI del certificado ({cert_serial}) no coincide con el RUC ingresado ({ruc_usuario})."
+        except Exception as e:
+            print(f"[FIRMA] Advertencia: No se pudo verificar RUC en certificado: {e}")
         
-        return True, "Firma y Clave correctas."
-    except ValueError:
-        return False, "Contraseña de la firma incorrecta."
+        return True, "Firma electrónica válida y vigente."
+        
+    except FileNotFoundError:
+        return False, "Archivo de firma no encontrado."
     except Exception as e:
-        return False, f"Error leyendo firma: {str(e)}"
+        return False, f"Error al validar firma: {str(e)}"
 
 
 def firmar_xml(xml_string, ruta_p12, password_p12):
     """
     Firma un XML usando XAdES-BES compatible con SRI Ecuador.
+    ACTUALIZADO: Usa SHA256 en lugar de SHA1.
     """
     try:
         # 1. Cargar el archivo .p12
@@ -93,21 +160,20 @@ def firmar_xml(xml_string, ruta_p12, password_p12):
             backend=default_backend()
         )
         
-        # 2. Identificar el certificado de usuario VIGENTE Y MÁS NUEVO
+        # 2. Identificar el certificado de usuario VIGENTE
         certificate = encontrar_certificado_valido(certificate_principal, additional_certificates)
         
         if certificate is None:
-            raise Exception("No se pudo identificar un certificado de usuario vigente dentro del P12.")
+            raise Exception("No se encontró un certificado de firma electrónica vigente en el archivo P12.")
         
         # 3. Parsear el XML
         try:
             root = etree.fromstring(xml_string.encode('utf-8'))
         except etree.XMLSyntaxError as e:
-            raise Exception("No se pudo identificar un certificado de usuario vigente dentro del P12.")
-
+            raise Exception(f"XML mal formado: {str(e)}")
         
-        # 4. FIRMA MANUAL CON SHA1 
-        xml_firmado = firmar_xml_manual_sha1(
+        # 4. FIRMA CON SHA256 (REQUERIDO POR SRI)
+        xml_firmado = firmar_xml_manual_sha256(
             root, 
             private_key, 
             certificate,
@@ -117,13 +183,14 @@ def firmar_xml(xml_string, ruta_p12, password_p12):
         return xml_firmado
         
     except Exception as e:
+        print(f"[FIRMA] Error crítico en firma: {str(e)}")
         raise Exception(f"Error en el proceso de firma: {str(e)}")
 
 
-def firmar_xml_manual_sha1(root, private_key, certificate, chain_certificates):
+def firmar_xml_manual_sha256(root, private_key, certificate, chain_certificates):
     """
-    Implementación manual de firma XAdES-BES con SHA1.
-    (El resto de la función se mantiene igual a tu código original)
+    Implementación manual de firma XAdES-BES con SHA256.
+    CORRECCIÓN CRÍTICA: Usa RSA-SHA256 y canonicalización exclusiva.
     """
     # Namespaces
     ns_ds = "http://www.w3.org/2000/09/xmldsig#"
@@ -132,29 +199,30 @@ def firmar_xml_manual_sha1(root, private_key, certificate, chain_certificates):
     etree.register_namespace('ds', ns_ds)
     etree.register_namespace('xades', ns_xades)
     
-    # 1. Canonicalizar el XML original (C14N)
-    xml_canonico = etree.tostring(root, method='c14n', exclusive=False, with_comments=False)
+    # 1. Canonicalizar el XML original (C14N EXCLUSIVO)
+    xml_canonico = etree.tostring(root, method='c14n', exclusive=True, with_comments=False)
     
-    # 2. Calcular el digest SHA1 del documento
-    digest_value = hashlib.sha1(xml_canonico).digest()
+    # 2. Calcular el digest SHA256 del documento
+    digest_value = hashlib.sha256(xml_canonico).digest()
     digest_value_b64 = base64.b64encode(digest_value).decode('utf-8')
     
     # 3. Crear el nodo Signature
-    signature_id = f"Signature-{uuid.uuid4().hex[:8]}"
-    signature = etree.Element(f"{{{ns_ds}}}Signature", attrib={"Id": signature_id}) # <--- CORRECCIÓN CLAVE    
+    signature_id = f"Signature{uuid.uuid4().hex[:8]}"
+    signature = etree.Element(f"{{{ns_ds}}}Signature", attrib={"Id": signature_id})
+    
     # 4. SignedInfo
     signed_info = etree.SubElement(signature, f"{{{ns_ds}}}SignedInfo")
     
     canonicalization_method = etree.SubElement(
         signed_info, 
         f"{{{ns_ds}}}CanonicalizationMethod",
-        attrib={"Algorithm": "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"}
+        attrib={"Algorithm": "http://www.w3.org/2001/10/xml-exc-c14n#"}  # C14N EXCLUSIVO
     )
     
     signature_method = etree.SubElement(
         signed_info,
         f"{{{ns_ds}}}SignatureMethod",
-        attrib={"Algorithm": "http://www.w3.org/2000/09/xmldsig#rsa-sha1"}
+        attrib={"Algorithm": "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"}  # SHA256
     )
     
     # Reference al documento
@@ -174,20 +242,20 @@ def firmar_xml_manual_sha1(root, private_key, certificate, chain_certificates):
     digest_method = etree.SubElement(
         reference,
         f"{{{ns_ds}}}DigestMethod",
-        attrib={"Algorithm": "http://www.w3.org/2000/09/xmldsig#sha1"}
+        attrib={"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha256"}  # SHA256
     )
     
     digest_value_elem = etree.SubElement(reference, f"{{{ns_ds}}}DigestValue")
     digest_value_elem.text = digest_value_b64
     
     # 5. Canonicalizar SignedInfo y firmarlo
-    signed_info_c14n = etree.tostring(signed_info, method='c14n', exclusive=False, with_comments=False)
+    signed_info_c14n = etree.tostring(signed_info, method='c14n', exclusive=True, with_comments=False)
     
-    # Firmar con SHA1 usando cryptography 
+    # Firmar con SHA256
     signature_bytes = private_key.sign(
         signed_info_c14n,
         padding.PKCS1v15(),
-        hashes.SHA1()  # SRI requiere SHA1
+        hashes.SHA256()  # SHA256 en lugar de SHA1
     )
     
     signature_value_b64 = base64.b64encode(signature_bytes).decode('utf-8')
@@ -201,11 +269,11 @@ def firmar_xml_manual_sha1(root, private_key, certificate, chain_certificates):
     x509_data = etree.SubElement(key_info, f"{{{ns_ds}}}X509Data")
     x509_cert = etree.SubElement(x509_data, f"{{{ns_ds}}}X509Certificate")
     
-    cert_der = certificate.public_bytes(serialization.Encoding.DER) 
+    cert_der = certificate.public_bytes(serialization.Encoding.DER)
     x509_cert.text = base64.b64encode(cert_der).decode('utf-8')
     
-    # 8. Agregar propiedades XAdES
-    agregar_propiedades_xades_manual(signature, certificate, signature_id) # Usando 'signature' como padre
+    # 8. Agregar propiedades XAdES con SHA256
+    agregar_propiedades_xades_manual(signature, certificate, signature_id)
     
     # 9. Insertar la firma en el XML original
     root.append(signature)
@@ -224,7 +292,7 @@ def firmar_xml_manual_sha1(root, private_key, certificate, chain_certificates):
 def agregar_propiedades_xades_manual(signature, certificate, signature_id):
     """
     Agrega propiedades XAdES-BES al nodo Signature.
-    (La función se mantiene igual a tu código original)
+    CORRECCIÓN: Usa SHA256 en lugar de SHA1.
     """
     ns_ds = "http://www.w3.org/2000/09/xmldsig#"
     ns_xades = "http://uri.etsi.org/01903/v1.3.2#"
@@ -265,19 +333,19 @@ def agregar_propiedades_xades_manual(signature, certificate, signature_id):
     signing_cert = etree.SubElement(signed_sig_props, f"{{{ns_xades}}}SigningCertificate")
     cert_elem = etree.SubElement(signing_cert, f"{{{ns_xades}}}Cert")
     
-    # CertDigest
+    # CertDigest con SHA256
     cert_digest_elem = etree.SubElement(cert_elem, f"{{{ns_xades}}}CertDigest")
     digest_method = etree.SubElement(
         cert_digest_elem,
         f"{{{ns_ds}}}DigestMethod",
-        attrib={"Algorithm": "http://www.w3.org/2000/09/xmldsig#sha1"}
+        attrib={"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha256"}  # SHA256
     )
     
     cert_der = certificate.public_bytes(serialization.Encoding.DER)
-    cert_sha1 = hashlib.sha1(cert_der).digest()
+    cert_sha256 = hashlib.sha256(cert_der).digest()  # SHA256 en lugar de SHA1
     
     digest_value = etree.SubElement(cert_digest_elem, f"{{{ns_ds}}}DigestValue")
-    digest_value.text = base64.b64encode(cert_sha1).decode('utf-8')
+    digest_value.text = base64.b64encode(cert_sha256).decode('utf-8')
     
     # IssuerSerial
     issuer_serial = etree.SubElement(cert_elem, f"{{{ns_xades}}}IssuerSerial")
@@ -287,8 +355,5 @@ def agregar_propiedades_xades_manual(signature, certificate, signature_id):
     
     x509_serial = etree.SubElement(issuer_serial, f"{{{ns_ds}}}X509SerialNumber")
     x509_serial.text = str(certificate.serial_number)
-
-
-
 
 
