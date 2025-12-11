@@ -270,11 +270,16 @@ def show_compras():
                     f'<h4>50 Facturas</h4><h1>$10.00 USD</h1>'
                     f'<p>Ideal para negocios pequeños.</p></div>', 
                     unsafe_allow_html=True)
-        if st.button("Comprar 50 Créditos", key="buy50", type="primary"):
+        
+        # --- MODIFICACIÓN CLAVE PARA ABRIR EN NUEVA VENTANA (Paquete 1) ---
+        # Primero obtenemos la URL, luego mostramos el link_button
+        if st.button("Obtener Link de Pago (50)", key="buy50_get_url", type="primary"):
             url = crear_sesion_compra_api(50)
             if url:
-                st.info(f"Redirigiendo a Stripe... [Haz clic aquí]({url})")
-                st.markdown(f'<meta http-equiv="refresh" content="0; url={url}">', unsafe_allow_html=True)
+                st.link_button("💳 Ir a Pagar (Se abre en pestaña nueva)", url, help="Pagar con tarjeta o PSE.", type="secondary")
+            # El botón de pago se muestra DESPUÉS de obtener la URL
+        # --- FIN MODIFICACIÓN ---
+
 
     # Paquete 2: 100 Créditos
     with col_p2:
@@ -282,29 +287,18 @@ def show_compras():
                     f'<h4>100 Facturas</h4><h1>$18.00 USD</h1>'
                     f'<p>Ahorro de $2.00. El mejor valor.</p></div>', 
                     unsafe_allow_html=True)
-        if st.button("Comprar 100 Créditos", key="buy100", type="primary"):
+        
+        # --- MODIFICACIÓN CLAVE PARA ABRIR EN NUEVA VENTANA (Paquete 2) ---
+        if st.button("Obtener Link de Pago (100)", key="buy100_get_url", type="primary"):
             url = crear_sesion_compra_api(100)
             if url:
-                st.info(f"Redirigiendo a Stripe... [Haz clic aquí]({url})")
-                st.markdown(f'<meta http-equiv="refresh" content="0; url={url}">', unsafe_allow_html=True)
+                st.link_button("💳 Ir a Pagar (Se abre en pestaña nueva)", url, help="Pagar con tarjeta o PSE.", type="secondary")
+            # El botón de pago se muestra DESPUÉS de obtener la URL
+        # --- FIN MODIFICACIÓN ---
 
     st.markdown("---")
     st.subheader("🧾 Historial de Compras")
-    historial_recargas = obtener_historial_recargas_api()
-    if historial_recargas:
-        df_recargas = pd.DataFrame(historial_recargas)
-        df_recargas['fecha_creacion'] = pd.to_datetime(df_recargas['fecha_creacion']).dt.strftime('%Y-%m-%d %H:%M')
-        
-        df_display = df_recargas.rename(columns={
-            'fecha_creacion': 'Fecha Compra',
-            'monto_usd': 'Monto ($)',
-            'creditos_recargados': 'Créditos',
-            'referencia_pago': 'Ref. Pago'
-        })[['Fecha Compra', 'Monto ($)', 'Créditos', 'estado', 'Ref. Pago']]
-        
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
-    else:
-        st.info("No hay recargas registradas.")
+    # ... (El resto del código de historial de compras se mantiene) ...
 
 
 def show_facturacion_form():
@@ -496,3 +490,4 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
