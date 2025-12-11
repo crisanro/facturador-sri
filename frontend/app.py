@@ -19,10 +19,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# IMPORTANTE: Configurar límite de archivos subidos (100 KB = 0.1 MB)
-import streamlit as st
-st.set_option('server.maxUploadSize', 1)  # 1 MB máximo para todo el servidor
-
 cookie_manager = CookieManager()
 cookies = cookie_manager.get_all()
 
