@@ -222,17 +222,16 @@ def generar_opciones_descarga_ui(clave_acceso, estado):
         url_xml = f"{base_url}?tipo=xml"
         
         # Usamos HTML/CSS para alinear los botones en la tabla
+# Usamos HTML/CSS para alinear los botones en la tabla
         return f"""
         <div style="display: flex; gap: 5px; justify-content: center;">
             <a href="{url_pdf}" target="_blank" 
-               class="btn btn-sm btn-info" 
-               style="background-color: #007bff; color: white; padding: 5px 10px; border-radius: 5px; text-decoration: none;">
-               RIDE (PDF)
+                style="background-color: #007bff; color: white; padding: 5px 10px; border-radius: 5px; text-decoration: none; font-weight: bold;">
+                RIDE (PDF)
             </a>
             <a href="{url_xml}" target="_blank" 
-               class="btn btn-sm btn-secondary"
-               style="background-color: #6c757d; color: white; padding: 5px 10px; border-radius: 5px; text-decoration: none;">
-               XML
+                style="background-color: #6c757d; color: white; padding: 5px 10px; border-radius: 5px; text-decoration: none; font-weight: bold;">
+                XML
             </a>
         </div>
         """
@@ -552,3 +551,4 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
