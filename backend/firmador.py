@@ -5,12 +5,10 @@ from cryptography.hazmat.primitives.serialization import pkcs12
 import os
 from datetime import timezone
 
-# ... (La función encontrar_certificado_valido no necesita cambios, aunque ya no será estrictamente necesaria para validar, sí lo es para firmar).
+# --- NO HAY CAMBIOS EN LAS FUNCIONES DE BÚSQUEDA DE CERTIFICADO Y VALIDACIÓN ---
 
 def encontrar_certificado_valido(cert_principal, certs_adicionales):
     """Busca el certificado vigente de usuario en toda la cadena."""
-    
-    # ... (Mantener la lógica para encontrar el certificado de 2025 para que FIRMAR funcione bien) ...
     todos_los_certs = []
     if cert_principal:
         todos_los_certs.append(cert_principal)
@@ -24,10 +22,9 @@ def encontrar_certificado_valido(cert_principal, certs_adicionales):
             fecha_fin = fecha_fin.replace(tzinfo=timezone.utc)
             
         if now < fecha_fin and '2.5.4.5' in cert.subject.rfc4514_string():
-            # Devuelve el certificado de usuario que esté vigente
             return cert
-                
-    return None 
+            
+    return None
     
     
 def firmar_xml(xml_string, ruta_p12, password_p12):
@@ -50,29 +47,25 @@ def firmar_xml(xml_string, ruta_p12, password_p12):
         if user_certificate is None:
              raise Exception("No se pudo identificar un certificado de usuario vigente dentro del P12.")
 
-        # 3. Configuración de XAdES-BES (Esto se mantiene)
+        # 3. Configuración de XAdES-BES (se mantiene)
         signature_options = {
             'known_roots': [],
             'cert_info': True,
             'signing_time': datetime.datetime.now(datetime.timezone.utc)
         }
         # Endesive espera el XML en bytes
-        xml_bytes = xml_string.encode('utf-8')    
+        xml_bytes = xml_string.encode('utf-8') 
         
-        # 4. CORRECCIÓN CLAVE: Usamos 'xades.bes.sign' y simplificamos los parámetros
-        # Pasamos el XML, la clave privada, el certificado del usuario y las opciones.
-
-        # Versión más probable que funcione con tu versión de Endesive:
+        # 4. CORRECCIÓN FINAL: Probar con la sintaxis más simple de xades.bes.sign
+        # Si el error persiste, la librería debe ser actualizada/reinstalada.
         xml_firmado = xades.bes.sign(
             xml_bytes,
             private_key,
             user_certificate,
-            additional_certificates, # Lo reinsertamos por si la firma lo requiere para la cadena
+            additional_certificates, 
             signature_options
         )
         
-        # NOTA: Si el error persiste, prueba quitando 'additional_certificates' de los parámetros de 'sign'.
-
         return xml_firmado.decode('utf-8')
 
     except Exception as e:
@@ -81,7 +74,6 @@ def firmar_xml(xml_string, ruta_p12, password_p12):
 def validar_archivo_p12(ruta_p12, password, ruc_usuario):
     """
     VALIDACIÓN SIMPLIFICADA: Solo verifica la contraseña y la vigencia.
-    Ignora el RUC.
     """
     try:
         with open(ruta_p12, 'rb') as f:
@@ -93,7 +85,7 @@ def validar_archivo_p12(ruta_p12, password, ruc_usuario):
             password.encode('utf-8')
         )
         
-        # 1. Verificar Vigencia (Busca un certificado vigente para confirmar que el archivo sirve)
+        # 1. Verificar Vigencia
         user_cert = encontrar_certificado_valido(certificate_principal, additional_certificates)
         
         if user_cert is None:
@@ -104,9 +96,8 @@ def validar_archivo_p12(ruta_p12, password, ruc_usuario):
         cert_expires = user_cert.not_valid_after
         if cert_expires.tzinfo is None:
             cert_expires = cert_expires.replace(tzinfo=timezone.utc)
-        
+            
         if now > cert_expires:
-            # Esta línea es redundante si user_cert != None, pero sirve como doble chequeo
             return False, "La firma electrónica expiró."
 
         # Si llegamos aquí: La clave es correcta, el archivo se abre, y hay un certificado vigente.
@@ -116,6 +107,3 @@ def validar_archivo_p12(ruta_p12, password, ruc_usuario):
         return False, "Contraseña de la firma incorrecta."
     except Exception as e:
         return False, f"Error leyendo firma: {str(e)}"
-
-
-
