@@ -13,7 +13,15 @@ IVA_RATE = 0.15
 TOKEN_COOKIE_KEY = 'auth_token_jwt'
 TOKEN_EXPIRY_DAYS = 7 
 
-st.set_page_config(page_title="Facturación SaaS", page_icon="🧾", layout="wide")
+st.set_page_config(
+    page_title="Facturación SaaS", 
+    page_icon="🧾", 
+    layout="wide"
+)
+
+# IMPORTANTE: Configurar límite de archivos subidos (100 KB = 0.1 MB)
+import streamlit as st
+st.set_option('server.maxUploadSize', 1)  # 1 MB máximo para todo el servidor
 
 cookie_manager = CookieManager()
 cookies = cookie_manager.get_all()
@@ -428,17 +436,70 @@ def show_configuracion():
         
         st.markdown("---")
         
-        with st.expander("🔄 Actualizar Firma"):
-            with st.form("actualizar_firma"):
-                nueva_clave = st.text_input("Nueva Clave", type="password")
-                nuevo_archivo = st.file_uploader("Nueva Firma (.p12)", type=["p12"])
+        # OPCIÓN 1: Editar TODO (RUC, Razón Social y Firma)
+        with st.expander("✏️ Editar Configuración Completa"):
+            st.info("Actualiza cualquier dato de tu empresa.")
+            with st.form("editar_config_completa"):
+                nuevo_ruc = st.text_input("RUC", value=config.get("ruc", ""), max_chars=13)
+                nueva_razon = st.text_input("Razón Social", value=config.get("razon_social", ""))
+                nueva_clave = st.text_input("Clave de Firma", type="password", help="Déjala en blanco si no quieres cambiar la firma")
+                nuevo_archivo = st.file_uploader(
+                    "Nueva Firma (.p12) - Opcional", 
+                    type=["p12"],
+                    help="Solo si quieres cambiar la firma. Máximo 100 KB"
+                )
                 
-                if st.form_submit_button("Actualizar", type="primary"):
-                    if not nueva_clave or not nuevo_archivo:
-                        st.error("Complete todos los campos.")
-                    elif nuevo_archivo.size > 100 * 1024:
-                        st.error("⚠️ Máximo 100 KB.")
+                if st.form_submit_button("💾 Guardar Cambios", type="primary"):
+                    if not nuevo_ruc or not nueva_razon:
+                        st.error("❌ RUC y Razón Social son obligatorios.")
+                    elif len(nuevo_ruc) != 13:
+                        st.error("❌ El RUC debe tener 13 dígitos.")
                     else:
+                        # Si hay nueva firma, validarla
+                        if nuevo_archivo:
+                            if nuevo_archivo.size > 100 * 1024:
+                                st.error("⚠️ El archivo supera 100 KB.")
+                            elif not nueva_clave:
+                                st.error("❌ Si subes nueva firma, debes ingresar su clave.")
+                            else:
+                                # Actualizar con nueva firma
+                                success, msg = configurar_empresa_api(
+                                    nuevo_ruc,
+                                    nueva_razon,
+                                    nueva_clave,
+                                    nuevo_archivo
+                                )
+                                if success:
+                                    st.success(msg)
+                                    obtener_configuracion_api.clear()
+                                    time.sleep(1)
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+                        else:
+                            # Solo actualizar RUC y Razón Social (sin tocar la firma)
+                            # Esto requiere un nuevo endpoint en el backend
+                            st.warning("⚠️ Para actualizar solo RUC/Razón Social sin cambiar la firma, contacta a soporte.")
+                            # TODO: Implementar endpoint PUT /actualizar-datos-empresa
+        
+        # OPCIÓN 2: Solo actualizar firma (mantener RUC y Razón Social)
+        with st.expander("🔄 Solo Actualizar Firma"):
+            st.info("Cambia únicamente tu firma electrónica, sin modificar RUC ni Razón Social.")
+            with st.form("actualizar_solo_firma"):
+                nueva_clave = st.text_input("Nueva Clave de Firma", type="password")
+                nuevo_archivo = st.file_uploader(
+                    "Subir Nueva Firma (.p12)", 
+                    type=["p12"],
+                    help="Tamaño máximo: 100 KB"
+                )
+                
+                if st.form_submit_button("🔄 Actualizar Firma", type="primary"):
+                    if not nueva_clave or not nuevo_archivo:
+                        st.error("❌ Complete todos los campos.")
+                    elif nuevo_archivo.size > 100 * 1024:
+                        st.error(f"⚠️ El archivo pesa {nuevo_archivo.size / 1024:.1f} KB. Máximo: 100 KB.")
+                    else:
+                        # Reutilizar RUC y Razón Social existentes
                         success, msg = configurar_empresa_api(
                             config.get("ruc"),
                             config.get("razon_social"),
@@ -453,13 +514,15 @@ def show_configuracion():
                         else:
                             st.error(msg)
         
+        # OPCIÓN 3: Eliminar todo
         st.markdown("---")
+        st.warning("⚠️ **Zona peligrosa:** Eliminar toda la configuración")
         
-        if st.button("🗑️ Eliminar Configuración", type="secondary"):
+        if st.button("🗑️ Eliminar Configuración Completa", type="secondary"):
             st.session_state.confirm_delete = True
             
         if st.session_state.get("confirm_delete"):
-            st.error("⚠️ ¿Está seguro?")
+            st.error("⚠️ ¿Está seguro? Eliminará RUC, Razón Social y Firma.")
             col_del, col_cancel = st.columns(2)
             with col_del:
                 if st.button("SÍ, Eliminar", key="confirm_del", type="primary"):
@@ -478,21 +541,26 @@ def show_configuracion():
                     st.rerun()
 
     else:
+        # ===== PRIMERA CONFIGURACIÓN =====
         st.warning("⚠️ Configure su empresa para facturar.")
         
         with st.form("config_empresa"):
-            ruc = st.text_input("RUC", max_chars=13, placeholder="1234567890001")
+            ruc = st.text_input("RUC (13 dígitos)", max_chars=13, placeholder="1234567890001")
             razon_social = st.text_input("Razón Social", placeholder="Mi Empresa S.A.")
             clave_firma = st.text_input("Clave de Firma", type="password")
-            archivo_firma = st.file_uploader("Firma (.p12)", type=["p12"])
+            archivo_firma = st.file_uploader(
+                "Firma Electrónica (.p12)", 
+                type=["p12"],
+                help="Tamaño máximo: 100 KB"
+            )
             
-            if st.form_submit_button("💾 Guardar", type="primary"):
+            if st.form_submit_button("💾 Guardar Configuración", type="primary"):
                 if not all([ruc, razon_social, clave_firma, archivo_firma]):
                     st.error("❌ Complete todos los campos.")
                 elif len(ruc) != 13:
-                    st.error("❌ RUC debe tener 13 dígitos.")
+                    st.error("❌ RUC debe tener exactamente 13 dígitos.")
                 elif archivo_firma.size > 100 * 1024:
-                    st.error(f"⚠️ Máximo 100 KB.")
+                    st.error(f"⚠️ El archivo pesa {archivo_firma.size / 1024:.1f} KB. Máximo permitido: 100 KB.")
                 else:
                     success, msg = configurar_empresa_api(ruc, razon_social, clave_firma, archivo_firma)
                     if success:
