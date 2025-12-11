@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 import os
 import time
-import pandas as pd # <-- ¡Nuevo Import! Necesario para tablas profesionales
+import pandas as pd 
 
 # --- 1. CONFIGURACIÓN INICIAL ---
 BACKEND_URL = os.getenv("API_URL", "http://facturador-backend:80") 
@@ -297,6 +297,7 @@ def show_dashboard():
         df['fecha_creacion'] = pd.to_datetime(df['fecha_creacion']).dt.strftime('%Y-%m-%d %H:%M')
         
         # 1. Aplicar la función de descarga a cada fila para crear la columna 'Acciones'
+        # Usamos df.apply para ejecutar la función de botones por cada fila
         df['Acciones'] = df.apply(
             lambda row: generar_opciones_descarga_ui(row['clave_acceso'], row['estado']),
             axis=1
@@ -310,7 +311,7 @@ def show_dashboard():
             'estado': 'Estado SRI'
         })[['Fecha Emisión', 'Clave de Acceso', 'Estado SRI', 'Acciones']] # <--- AGREGAR ACCIONES
         
-        # 3. Mostrar la tabla con el contenido HTML
+        # 3. Mostrar la tabla con el contenido HTML (escape=False es CRÍTICO)
         st.markdown(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
         
     else:
@@ -418,6 +419,8 @@ def generar_opciones_descarga_ui(clave_acceso, estado):
         return '<span style="color: red; font-weight: bold;">Rechazada</span>'
     
     return '<span style="color: orange;">En Proceso...</span>'
+
+    
 # ==========================================
 #              FLUJO PRINCIPAL (Corregido)
 # ==========================================
@@ -522,6 +525,7 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
 
 
 
