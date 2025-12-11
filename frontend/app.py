@@ -320,8 +320,8 @@ def show_configuracion():
             st.metric("RUC", config.get("ruc", "N/A"))
         with col2:
             st.metric("Razón Social", config.get("razon_social", "N/A"))
-            
-        st.caption(f"Archivo .p12 asociado: {os.path.basename(config.get('firma_path', ''))}")
+        firma_path = config.get("firma_path") or ''    
+        st.caption(f"Archivo .p12 asociado: {os.path.basename(firma_path)}")
         
         st.markdown("---")
         
@@ -611,4 +611,5 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
 
