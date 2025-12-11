@@ -69,3 +69,4 @@ def decrypt_firma_key(encrypted_key: str) -> str:
              # Este error puede significar clave incorrecta o clave Fernet incorrecta
              raise Exception("Error al descifrar la clave de la firma. La clave es incorrecta o está dañada.")
     raise Exception("El servicio de cifrado interno no está disponible.")
+
