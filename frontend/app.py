@@ -153,71 +153,108 @@ def crear_sesion_compra_api(cantidad):
 
 # --- 5. MÓDULOS DE INTERFAZ (UI Functions) ---
 
-def show_configuracion():
-    """Muestra el formulario de configuración inicial de RUC y Firma."""
-    st.warning("⚠️ **Perfil Incompleto:** Necesitas configurar tu RUC y Firma para empezar.")
+# Función auxiliar para consultar el estado del backend
+@st.cache_data(ttl=60) # Cacha la respuesta por 60 segundos
+def obtener_configuracion_api():
+    token = st.session_state.token
+    if not token: return {"configurada": False}
     
-    with st.expander("🚀 CONFIGURAR MI EMPRESA (Paso Único)", expanded=True):
-        col_a, col_b = st.columns(2)
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        response = requests.get(f"{API_URL}/obtener-configuracion-empresa", headers=headers)
+        if response.status_code == 200:
+            return response.json()
+    except:
+        pass # Ignorar errores de conexión
+    return {"configurada": False}
+
+# Función auxiliar para eliminar la configuración
+def eliminar_configuracion_api():
+    token = st.session_state.token
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        response = requests.delete(f"{API_URL}/eliminar-configuracion-empresa", headers=headers)
+        if response.status_code == 200:
+            return True, response.json().get("mensaje", "Eliminado.")
+        else:
+            return False, response.json().get("detail", "Error al eliminar.")
+    except Exception as e:
+        return False, f"Error de conexión: {e}"
+
+
+def show_configuracion():
+    # 1. Obtener el estado actual de la configuración
+    config = obtener_configuracion_api()
+    
+    # 2. Mostrar la interfaz
+    st.subheader("Firma Electrónica y Datos de Facturación")
+
+    if config.get("configurada"):
         
-        # --- Columna A: Datos SRI ---
-        with col_a:
-            st.subheader("1. Datos del SRI")
-            ruc_search = st.text_input("Ingresa tu RUC", max_chars=13, placeholder="17xxxxxxxx001")
+        # --- ESTADO: CONFIGURADA Y VIGENTE ---
+        st.success("✅ Configuración de empresa registrada y vigente.")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("RUC", config.get("ruc", "N/A"))
+        with col2:
+            st.metric("Razón Social", config.get("razon_social", "N/A"))
             
-            razon_social_val = ""
-            
-            if st.button("🔍 Buscar Datos en SRI"):
-                if len(ruc_search) == 13:
-                    with st.spinner("Conectando con SRI..."):
-                        datos = consultar_ruc_api(ruc_search)
-                        if datos and datos['valido']:
-                            st.session_state.datos_sri_temp = datos
-                            st.toast("✅ Datos encontrados", icon="🎉")
-                        else:
-                            st.error("❌ RUC no encontrado o inválido.")
-                            st.session_state.datos_sri_temp = {}
-
-            # Mostrar datos si existen en memoria
-            if st.session_state.datos_sri_temp:
-                d = st.session_state.datos_sri_temp
-                razon_social_val = d.get('razon_social', '')
-                st.info(f"**Nombre:** {razon_social_val}")
-                if d.get('estado') != "ACTIVO":
-                    st.error(f"⚠️ Estado Contribuyente: {d.get('estado')}")
-
-            # Inputs finales
-            final_razon = st.text_input("Razón Social", value=razon_social_val)
-            final_dir = st.text_input("Dirección Matriz", placeholder="Ej: Av. Amazonas y ONU")
-
-        # --- Columna B: Firma Electrónica ---
-        with col_b:
-            st.subheader("2. Firma Electrónica")
-            uploaded_file = st.file_uploader("Archivo .p12", type="p12")
-            uploaded_pass = st.text_input("Contraseña del .p12", type="password")
-
+        st.caption(f"Archivo .p12 asociado: {os.path.basename(config.get('firma_path', ''))}")
+        
         st.markdown("---")
-        if st.button("💾 Guardar y Activar Facturación", type="primary"):
-            if ruc_search and final_razon and uploaded_file and uploaded_pass:
-                files = {"archivo_firma": (uploaded_file.name, uploaded_file, "application/x-pkcs12")}
-                data = {"ruc": ruc_search, "razon_social": final_razon, "clave_firma": uploaded_pass}
-                headers = {"Authorization": f"Bearer {st.session_state.token}"}
-                
-                with st.spinner("Validando firma criptográfica..."):
-                    try:
-                        res = requests.post(f"{BACKEND_URL}/configurar-empresa", data=data, files=files, headers=headers)
-                        if res.status_code == 200:
-                            st.balloons()
-                            st.success("¡Perfil Activado! El sistema se recargará...")
-                            st.session_state.config_completa = True
-                            st.session_state.empresa_ruc = ruc_search
-                            time.sleep(2)
-                            st.rerun()
-                        else:
-                            st.error(f"Error: {res.json().get('detail')}")
-                    except Exception as e: st.error(f"Error crítico: {e}")
-            else:
-                st.warning("Por favor completa todos los campos obligatorios.")
+        
+        # Opción 1: Eliminar y Reconfigurar
+        st.warning("Si su firma ha expirado o desea cambiar de RUC, elimine la configuración actual.")
+        if st.button("🔴 Eliminar Configuración Actual", type="secondary"):
+            if "confirm_delete" not in st.session_state:
+                st.session_state.confirm_delete = True
+                st.rerun()
+            
+        if st.session_state.get("confirm_delete"):
+            st.error("⚠️ ¿Está seguro que desea ELIMINAR la configuración? Esto es irreversible.")
+            col_del, col_cancel = st.columns(2)
+            with col_del:
+                if st.button("SÍ, Eliminar Permanentemente", key="confirm_del_btn", type="primary"):
+                    success, msg = eliminar_configuracion_api()
+                    if success:
+                        st.session_state.confirm_delete = False
+                        st.success(msg)
+                        obtener_configuracion_api.clear() # Limpiar caché
+                        st.rerun()
+                    else:
+                        st.error(msg)
+            with col_cancel:
+                if st.button("NO, Cancelar", key="cancel_del_btn"):
+                    st.session_state.confirm_delete = False
+                    st.rerun()
+
+    else:
+        # --- ESTADO: NO CONFIGURADA (Mostrar Formulario) ---
+        st.warning("⚠️ Su empresa no está configurada para facturar. Por favor, suba su archivo de firma.")
+        
+        with st.form("config_empresa_form", clear_on_submit=True):
+            ruc = st.text_input("RUC (Ecuador)", max_chars=13)
+            razon_social = st.text_input("Razón Social / Nombre Comercial")
+            clave_firma = st.text_input("Clave de la Firma Electrónica", type="password")
+            archivo_firma = st.file_uploader("Subir Archivo de Firma (.p12)", type="p12")
+            
+            submitted = st.form_submit_button("Guardar Configuración", type="primary")
+
+            if submitted:
+                if not all([ruc, razon_social, clave_firma, archivo_firma]):
+                    st.error("Por favor, complete todos los campos y suba el archivo.")
+                else:
+                    # Llamar a la función que ya tenías para POST /configurar-empresa
+                    success, msg = configurar_empresa_api(ruc, razon_social, clave_firma, archivo_firma)
+                    if success:
+                        st.success(msg)
+                        obtener_configuracion_api.clear() # Limpiar caché
+                        st.rerun()
+                    else:
+                        st.error(msg)
+                        
+    st.markdown("---")
 
 
 def show_dashboard():
@@ -448,6 +485,7 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
 
 
 
