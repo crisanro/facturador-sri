@@ -24,7 +24,8 @@ from fastapi.security import APIKeyHeader
 
 # Importamos nuestros módulos locales
 import utils_sri, xml_builder, database, auth, firmador
-
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(BASE_DIR, "firmas_clientes")
 # --- LIFECYCLE (INICIO/APAGADO) ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -364,6 +365,7 @@ def generar_nueva_api_key(user: dict = Depends(get_current_user)):
         return {"mensaje": "API Key generada exitosamente.", "api_key": new_key}
     
     raise HTTPException(500, "Error al guardar la nueva clave en la base de datos.")
+
 
 
 
