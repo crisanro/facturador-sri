@@ -5,10 +5,9 @@ from zeep import Client, Settings, Transport
 from zeep.exceptions import Fault
 import logging
 import time
-from typing import Tuple
+from typing import Tuple, Dict, Any
 import database 
 import ride_generator
-from typing import Tuple
 
 # Configuramos logging para ver errores si algo falla
 logging.basicConfig()
@@ -65,52 +64,57 @@ def enviar_comprobante(xml_firmado: str) -> Tuple[str, str]:
 
 
         
-def consultar_autorizacion(clave_acceso: str, ambiente: int) -> Tuple[str, str, str]: 
+def consultar_autorizacion(clave_acceso: str, ambiente: int) -> Dict[str, Any]: 
     """
     Consulta el estado de autorización del comprobante usando la clave de acceso.
+    Ahora devuelve un diccionario para ser consumido por el polling.
     """
-    # Si quieres que el ambiente sea dinámico, la lógica dentro debe cambiar las WSDL.
-    # Para el uso actual, solo ajustamos la definición.
-    
-    # Si el ambiente es 1 (pruebas), usamos WSDL_AUTORIZACION_PRUEBAS
-    # Si quisieras producción (ambiente=2), la lógica aquí se complicaría.
-    
-    # Por ahora, solo ajustamos el parámetro de entrada para que no falle el Polling.
-    url_wsdl = WSDL_AUTORIZACION_PRUEBAS
+    # Usamos WSDL_AUTORIZACION_PRUEBAS como base
     try:
         settings = Settings(strict=False, xml_huge_tree=True)
-        client = Client(WSDL_AUTORIZACION_PRUEBAS, settings=settings, transport=transport)
-        
-        # Invocamos el método autorizacionComprobante [cite: 221]
+        # client = Client(WSDL_AUTORIZACION_PRUEBAS, settings=settings, transport=transport) # Asumo que client/transport son globales
+
+        # --- Invocación al servicio (Mantenemos tu lógica original de Zeep) ---
+        client = Client(WSDL_AUTORIZACION_PRUEBAS, settings=settings, transport=transport) 
         respuesta = client.service.autorizacionComprobante(clave_acceso)
         
-        # Respuesta es RespuestaAutorizacionComprobante [cite: 220]
+        # 1. Verificar si hay autorización en la respuesta
         if respuesta.autorizaciones and respuesta.autorizaciones[0]:
             autorizacion = respuesta.autorizaciones[0]
-            estado = autorizacion.estado  # 'AUTORIZADO', 'NO AUTORIZADO', 'RECHAZADO' [cite: 149, 235]
-            
-            # En el esquema offline, el número de autorización es la clave de acceso [cite: 137]
+            estado = autorizacion.estado
             numero_autorizacion = autorizacion.numeroAutorizacion if hasattr(autorizacion, 'numeroAutorizacion') else clave_acceso
-            
+
+            # 2. Caso AUTORIZADO
             if estado == 'AUTORIZADO':
-                # El SRI devuelve el XML completo (con la firma y la etiqueta de Autorización)
-                return "AUTORIZADO", numero_autorizacion, autorizacion.comprobante # Contiene el CDATA del XML autorizado [cite: 233]
+                return {
+                    "estado": "AUTORIZADO", 
+                    "numero_autorizacion": numero_autorizacion,
+                    "xml_autorizado": autorizacion.comprobante
+                }
+    
+            # 3. Caso NO AUTORIZADO o RECHAZADO
+            else: 
+                # (Aquí necesitas la variable error_msgs, que se genera en la función original)
+                # Simulamos la generación de error_msgs para el return:
+                error_msgs = [f"[{m.identificador}] {m.mensaje} ({m.tipo})" 
+                              for m in autorizacion.mensajes if m.tipo == 'ERROR']
+
+                return {
+                    "estado": estado, 
+                    "numero_autorizacion": numero_autorizacion,
+                    "mensaje": f"Motivo(s): {'; '.join(error_msgs)}"
+                }
+
+        # 4. Si no hay autorizaciones, se asume que sigue EN PROCESAMIENTO
+        return {"estado": "EN PROCESAMIENTO", "mensaje": "Esperando respuesta del SRI..."}
             
-            else: # NO AUTORIZADO o RECHAZADO
-                mensajes = autorizacion.mensajes
-                error_msgs = [f"[{m.identificador}] {m.mensaje} ({m.tipo})" for m in mensajes if m.tipo == 'ERROR']
-                
-                # Se devuelve el primer error para el log del usuario
-                return estado, numero_autorizacion, f"Motivo(s): {'; '.join(error_msgs)}"
-                
-        # Si no hay autorizaciones, puede que siga en 'EN PROCESAMIENTO' (PPR)
-        return "EN PROCESAMIENTO", clave_acceso, "Esperando respuesta del SRI..."
-        
     except Fault as f:
-        return "ERROR_AUTORIZACION_SOAP", clave_acceso, f"Error de protocolo (SOAP Fault): {str(f.message)}"
+        # Errores SOAP
+        return {"estado": "ERROR_AUTORIZACION_SOAP", "mensaje": f"Error de protocolo (SOAP Fault): {str(f.message)}"}
         
     except Exception as e:
-        return "ERROR_CONEXION", clave_acceso, f"Fallo al consultar autorización: {str(e)}"
+        # Errores de conexión/genéricos
+        return {"estado": "ERROR_CONEXION", "mensaje": f"Fallo al consultar autorización: {str(e)}"}
 
 # Constantes de Polling
 MAX_ATTEMPTS = 5
