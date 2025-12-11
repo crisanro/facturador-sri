@@ -136,8 +136,7 @@ def firmar_xml_manual_sha1(root, private_key, certificate, chain_certificates):
     
     # 3. Crear el nodo Signature
     signature_id = f"Signature-{uuid.uuid4().hex[:8]}"
-    signature = etree.SubElement(f"{{{ns_ds}}}Signature", attrib={"Id": signature_id})
-    
+    signature = etree.Element(f"{{{ns_ds}}}Signature", attrib={"Id": signature_id}) # <--- CORRECCIÓN CLAVE    
     # 4. SignedInfo
     signed_info = etree.SubElement(signature, f"{{{ns_ds}}}SignedInfo")
     
@@ -201,7 +200,7 @@ def firmar_xml_manual_sha1(root, private_key, certificate, chain_certificates):
     x509_cert.text = base64.b64encode(cert_der).decode('utf-8')
     
     # 8. Agregar propiedades XAdES
-    agregar_propiedades_xades_manual(signature, certificate, signature_id)
+    agregar_propiedades_xades_manual(signature, user_certificate, signature_id) # Usando 'signature' como padre
     
     # 9. Insertar la firma en el XML original
     root.append(signature)
@@ -283,3 +282,4 @@ def agregar_propiedades_xades_manual(signature, certificate, signature_id):
     
     x509_serial = etree.SubElement(issuer_serial, f"{{{ns_ds}}}X509SerialNumber")
     x509_serial.text = str(certificate.serial_number)
+
