@@ -188,10 +188,19 @@ def enviar_comprobante(xml_firmado: str, ambiente: int):
             }
             errores.append(error_detalle)
         
+        # Formatear errores de forma legible
+        errores_formateados = []
+        for error in errores:
+            msg = f"[{error['identificador']}] {error['mensaje']}"
+            if error['info_adicional']:
+                msg += f" - {error['info_adicional']}"
+            errores_formateados.append(msg)
+        
         return {
             "estado": estado_sri,
             "mensaje": "Comprobante DEVUELTO por el SRI.",
-            "errores": errores
+            "errores": errores,
+            "errores_legibles": errores_formateados
         }
 
     except requests.exceptions.Timeout:
