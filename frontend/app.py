@@ -45,17 +45,12 @@ def do_login(email, password):
     """Inicia sesión y guarda el token y estado del usuario"""
     try:
         res = requests.post(f"{BACKEND_URL}/login", json={"email": email, "password": password})
-    if res.status_code == 200:
-        data = res.json()
-        st.session_state.token = data["access_token"]
-        st.session_state.config_completa = data["configuracion_completa"]
-        st.session_state.empresa_ruc = data.get("ruc_usuario")
-        st.session_state.api_key = data.get("api_key_persistente") # <--- ¡Guardar la clave estática!
-        st.rerun()
-        elif res.status_code == 403:
-            st.error("⚠️ Tu email no ha sido verificado. Revisa los logs por el código.")
-        else:
-            st.error("❌ Credenciales incorrectas")
+        # La línea del IF (línea 48) debe estar correctamente indentada
+        if res.status_code == 200: 
+            data = res.json()
+            st.session_state.token = data["access_token"]
+            # ... (el resto del código de sesión) ...
+        # ... (el resto del manejo de errores 403, 401) ...
     except Exception as e:
         st.error(f"No hay conexión con el Backend: {e}")
 
@@ -421,4 +416,5 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
 
