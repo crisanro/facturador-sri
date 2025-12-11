@@ -11,3 +11,4 @@ lxml
 requests
 asn1crypto
 pyopenssl
+stripe
