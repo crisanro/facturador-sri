@@ -4,7 +4,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
 import os
 from datetime import timezone
-
+from endesive.xades import bes
 # ... (La función encontrar_certificado_valido no necesita cambios, aunque ya no será estrictamente necesaria para validar, sí lo es para firmar).
 
 def encontrar_certificado_valido(cert_principal, certs_adicionales):
@@ -133,4 +133,5 @@ def validar_archivo_p12(ruta_p12, password, ruc_usuario):
         return False, "Contraseña de la firma incorrecta."
     except Exception as e:
         return False, f"Error leyendo firma: {str(e)}"
+
 
