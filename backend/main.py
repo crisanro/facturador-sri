@@ -22,6 +22,7 @@ import stripe_service
 import sri_service
 import utils_sri, xml_builder, database, auth, firmador, sri_client
 import encryption
+import database
 
 # Importamos nuestros módulos locales
 import utils_sri, xml_builder, database, auth, firmador
@@ -279,26 +280,31 @@ def eliminar_configuracion_empresa(user: dict = Depends(get_current_user)): # <-
 @app.get("/saldo-facturas")
 async def obtener_saldo_facturas(current_user: dict = Depends(get_current_user)):
     """
-    Devuelve el saldo de facturas del usuario autenticado.
-    ACTUALIZADO: Ahora también devuelve la API Key persistente.
+    Devuelve el saldo de facturas del usuario autenticado, usando MySQL.
     """
     try:
-        # Buscar el usuario en la base de datos
-        usuario = db_users.find_one({"email": current_user["email"]})
+        # 1. Buscar el usuario en MySQL/MariaDB
+        # Esta función debe existir en tu database.py
+        usuario = database.buscar_usuario_por_email(current_user["email"])
         
         if not usuario:
-            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+            raise HTTPException(status_code=404, detail="Usuario no encontrado en la DB")
         
-        # Retornar datos completos del usuario
+        # 2. Retornar datos (las claves son las esperadas por el frontend)
         return {
-            "creditos_disponibles": usuario.get("creditos_disponibles", 0),
+            "creditos_disponibles": usuario.get("creditos", 0),  # Nota: En MySQL, la columna es 'creditos'
             "ruc_usuario": usuario.get("ruc"),
-            "api_key_persistente": usuario.get("api_key_persistente"),  # ← CRÍTICO
+            "api_key_persistente": usuario.get("api_key"),        # Nota: En MySQL, la columna es 'api_key'
             "configuracion_completa": usuario.get("firma_path") is not None
         }
     
+    except HTTPException:
+        # Re-lanzar errores 404/400
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al consultar saldo: {str(e)}")
+        # Capturar errores de MySQL o lógica y mostrarlos para depuración
+        print(f"❌ ERROR CRÍTICO en /saldo-facturas: {e}")
+        raise HTTPException(status_code=500, detail=f"Error al consultar saldo (DB): {str(e)}")
         
     
 @app.post("/generar-api-key")
@@ -613,6 +619,7 @@ def descargar_comprobante_publico(clave_acceso: str, tipo: str = "pdf"):
         )
         
     raise HTTPException(status_code=400, detail="Tipo de descarga inválido. Use 'pdf' o 'xml'.")
+
 
 
 
