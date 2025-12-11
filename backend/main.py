@@ -31,7 +31,9 @@ UPLOAD_DIR = os.path.join(BASE_DIR, "firmas_clientes")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Se ejecuta al iniciar
-    os.makedirs("firmas_clientes", exist_ok=True)
+    os.makedirs("firmas_clientes", exist_ok=True) # Este ya existe
+    os.makedirs("pdfs_facturas", exist_ok=True)  # <--- Debe ser creado
+    os.makedirs("xmls_autorizados", exist_ok=True) # <--- Debe ser creado
     database.inicializar_tablas()
     yield
     # Se ejecuta al apagar (opcional)
@@ -571,3 +573,4 @@ def descargar_comprobante_publico(clave_acceso: str, tipo: str = "pdf"):
         )
         
     raise HTTPException(status_code=400, detail="Tipo de descarga inválido. Use 'pdf' o 'xml'.")
+
