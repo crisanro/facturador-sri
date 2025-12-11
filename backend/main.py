@@ -10,7 +10,7 @@ from fastapi import (
     Response, 
     BackgroundTasks # <--- ¡AGREGA ESTO!
 )
-from fastapi.security import OAuth2PasswordBearer, APIKeyHeader # <--- Esto es para JWT y API Key
+from fastapi.security import APIKeyHeader # <--- Esto es para JWT y API Key
 from pydantic import BaseModel
 from typing import List, Optional
 import shutil
@@ -20,7 +20,6 @@ from contextlib import asynccontextmanager
 import stripe_service
 import sri_service
 import utils_sri, xml_builder, database, auth, firmador, sri_client
-from fastapi.security import APIKeyHeader
 import encryption
 
 # Importamos nuestros módulos locales
@@ -39,7 +38,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="SaaS Facturación Ecuador", lifespan=lifespan)
 
 # Seguridad
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 # --- MODELOS DE DATOS ---
 
@@ -118,10 +117,20 @@ def get_current_user_api_key(api_key: str = Depends(api_key_header)):
         
     return user
     
-def get_current_user(token: str = Depends(oauth2_scheme)):
+def get_current_user(authorization: str = Header(..., alias="Authorization")):
+    """
+    Lee el token del header Authorization: Bearer [token] y valida.
+    """
+    if not authorization or not authorization.startswith("Bearer "):
+         raise HTTPException(status_code=401, detail="Token JWT inválido o faltante en Authorization: Bearer.")
+         
+    # Extraemos solo el token (quitando "Bearer ")
+    token = authorization.split(" ")[1]
+    
     payload = auth.decode_token(token)
     if not payload:
-        raise HTTPException(401, "Token inválido o expirado")
+        raise HTTPException(401, "Token JWT inválido o expirado")
+        
     email = payload.get("sub")
     user = database.buscar_usuario_por_email(email)
     if not user:
@@ -562,6 +571,7 @@ def eliminar_configuracion_empresa(user: dict = Depends(get_current_user)):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al eliminar la configuración: {str(e)}")
+
 
 
 
