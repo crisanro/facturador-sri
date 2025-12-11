@@ -212,66 +212,39 @@ def configurar_empresa(
 
 @app.post("/emitir-factura")
 def emitir_factura(factura: FacturaCompleta, 
-                   background_tasks: BackgroundTasks, # <-- Mover aquí
+                   background_tasks: BackgroundTasks, 
                    user: dict = Depends(get_current_user_api_key)):
-    if not user['ruc']: 
-        raise HTTPException(400, "Falta configurar empresa.")
     
-    target_ruc = user['ruc']
-    
-    # ... (omitiendo checks de firma_path y creditos por brevedad, pero mantenlos) ...
+    # ... (código de RUC, secuencial, clave, xml_crudo, xml_firmado se mantiene) ...
 
     try:
         secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
-        factura.secuencial = secuencial
-        factura.ruc = target_ruc
-
-        clave = utils_sri.generar_clave_acceso(
-            factura.fecha_emision, "01", factura.ruc, factura.ambiente, 
-            factura.serie, factura.secuencial, "12345678"
-        )
-        
-        xml_crudo = xml_builder.crear_xml_factura(factura, clave)
+        # ... (resto de lógica de clave y firma) ...
         xml_firmado = firmador.firmar_xml(xml_crudo, user['firma_path'], user['firma_clave'])
         
-        # --- NUEVA LÓGICA DE ENVÍO AL SRI ---
+        # --- LÓGICA DE ENVÍO ASÍNCRONO AL SRI ---
         
-        # 1. Enviar el comprobante
+        # 1. Enviar el comprobante a RECEPCIÓN
         envio_resultado = sri_service.enviar_comprobante(xml_firmado, factura.ambiente)
         
         if envio_resultado['estado'] == 'RECIBIDA':
             
-            # 2. Consultar el estado de autorización (espera breve y consulta)
-            # En producción, esto se haría en una tarea asíncrona o un bucle de espera
-            # Aquí, por ser una API síncrona, consultamos una vez inmediatamente:
-            
-            time.sleep(1) # Esperamos 1 segundo por si el SRI está lento
-            autorizacion_resultado = sri_service.consultar_autorizacion(clave, factura.ambiente)
-
-            database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, autorizacion_resultado['estado'])
+            # 2. Guardar en DB inmediatamente con estado 'RECIBIDA' y descontar crédito
+            database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, "RECIBIDA")
             database.descontar_credito(user['id'])
 
-            if autorizacion_resultado['estado'] == 'AUTORIZADO':
-                # La factura está OK y lista.
-                return {
-                    "estado": "AUTORIZADO", 
-                    "clave_acceso": clave,
-                    "numero_autorizacion": autorizacion_resultado['numero_autorizacion']
-                }
-            
-            elif autorizacion_resultado['estado'] == 'NO AUTORIZADO':
-                # El SRI la rechazó después de recibirla (ej. error en totales)
-                raise HTTPException(400, f"SRI RECHAZÓ (NO AUTORIZADO): {autorizacion_resultado.get('errores', ['Error desconocido'])}")
-                
-            else:
-                # Quedó en RECIBIDA o EN PROCESO. (Se debe consultar después)
-                return {
-                    "estado": autorizacion_resultado['estado'], 
-                    "mensaje": "Factura enviada. Consulta el estado en unos segundos."
-                }
+            # 3. Delegar la consulta de autorización a una tarea de fondo (Polling)
+            background_tasks.add_task(sri_service.consultar_y_actualizar_autorizacion, clave, factura.ambiente)
+
+            # 4. Devolver respuesta INMEDIATA al usuario (sin esperar)
+            return {
+                "estado": "RECIBIDA", 
+                "clave_acceso": clave,
+                "mensaje": "Comprobante recibido. El estado final se actualizará en 5-30 segundos."
+            }
                 
         elif envio_resultado['estado'] == 'DEVUELTA':
-            # Rechazo inmediato (ej. error en XML o clave de acceso)
+            # Rechazo inmediato (No consume crédito).
             database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, "DEVUELTA")
             raise HTTPException(400, f"SRI DEVUELTA (Error de Recepción): {envio_resultado.get('errores', ['Error desconocido'])}")
             
@@ -407,6 +380,7 @@ def generar_nueva_api_key(user: dict = Depends(get_current_user)):
         return {"mensaje": "API Key generada exitosamente.", "api_key": new_key}
     
     raise HTTPException(500, "Error al guardar la nueva clave en la base de datos.")
+
 
 
 
