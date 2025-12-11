@@ -182,16 +182,16 @@ def completar_datos_empresa(email_usuario, ruc, razon_social, path_firma, clave_
 
 def eliminar_configuracion_empresa(email_usuario: str):
     """
-    Elimina los datos de configuración de la empresa (RUC, firma, clave) 
-    para permitir una nueva configuración.
+    Elimina los datos de configuración de la firma (ruta y clave) y el RUC/razón social.
+    Nota: Si quieres mantener el RUC/razón social, solo setea firma_path y firma_clave a NULL.
     """
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
     try:
-        # Se ponen los campos sensibles a NULL/vacío.
+        # Se ponen los campos de la firma a NULL, PERO MANTENEMOS RUC y RAZON SOCIAL.
         sql = """UPDATE empresas 
-                 SET ruc = NULL, razon_social = NULL, firma_path = NULL, firma_clave = NULL
+                 SET firma_path = NULL, firma_clave = NULL
                  WHERE email = %s"""
         cursor.execute(sql, (email_usuario,))
         conn.commit()
@@ -202,6 +202,7 @@ def eliminar_configuracion_empresa(email_usuario: str):
     finally:
         cursor.close()
         conn.close()
+        
 # --- FUNCIONES DE FACTURACIÓN (MANTENEMOS IGUAL) ---
 
 def obtener_siguiente_secuencial(empresa_id, serie):
@@ -437,5 +438,6 @@ def obtener_factura_por_clave_sin_usuario(clave_acceso):
     finally:
         cursor.close()
         conn.close()
+
 
 
