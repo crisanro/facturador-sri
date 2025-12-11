@@ -238,29 +238,72 @@ def emitir_factura(factura: FacturaCompleta,
                    background_tasks: BackgroundTasks, 
                    user: dict = Depends(get_current_user_api_key)):
     
-    # ... (Chequeos iniciales) ...
+    # Chequeo inicial: Si el usuario tiene créditos
+    if user['creditos'] <= 0:
+        raise HTTPException(400, "Créditos insuficientes. Por favor, recargue su saldo.")
+        
+    # Chequeo inicial: Si tiene la configuración de la empresa
+    if not user['ruc']: 
+        raise HTTPException(400, "Falta configurar empresa.")
 
     try:
-        # 1. Obtener secuencial y ajustar la factura (OBLIGATORIO)
+        # --- PREPARACIÓN DE LA FACTURA ---
+        
+        # 1. Obtener clave de firma descifrada (SEGURIDAD)
+        # La clave debe ser descifrada AHORA antes de pasarse al firmador.
+        clave_firma_descifrada = encryption.decrypt_data(user['firma_clave']).strip()
+        
+        # 2. Obtener secuencial y ajustar la factura
         secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
         factura.secuencial = secuencial
-        factura.ruc = user['ruc'] # Usamos el RUC del usuario autenticado
+        factura.ruc = user['ruc']
         
-        # 2. Generar CLAVE de Acceso (OBLIGATORIO)
+        # 3. Generar CLAVE de Acceso
         clave = utils_sri.generar_clave_acceso(
             factura.fecha_emision, "01", factura.ruc, factura.ambiente, 
             factura.serie, factura.secuencial, "12345678"
         )
         
-        # 3. Generar XML CRUDO (OBLIGATORIO - ¡LA LÍNEA QUE FALTABA!)
+        # 4. Generar XML CRUDO
         xml_crudo = xml_builder.crear_xml_factura(factura, clave)
         
-        # 4. Firmar XML (Ahora sí usa las variables definidas)
-        xml_firmado = firmador.firmar_xml(xml_crudo, user['firma_path'], user['firma_clave'])
+        # 5. Firmar XML
+        xml_firmado = firmador.firmar_xml(xml_crudo, user['firma_path'], clave_firma_descifrada)
         
-        # ... (resto de la lógica de envío asíncrono al SRI) ...
+        # --- ENVÍO ASÍNCRONO AL SRI (ESTABILIDAD) ---
         
+        # 6. Enviar el comprobante a RECEPCIÓN
+        envio_resultado = sri_service.enviar_comprobante(xml_firmado, factura.ambiente)
+        
+        if envio_resultado['estado'] == 'RECIBIDA':
+            
+            # 7. Guardar en DB inmediatamente con estado 'RECIBIDA' y descontar crédito
+            database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, "RECIBIDA")
+            database.descontar_credito(user['id'])
+
+            # 8. Delegar la consulta de autorización a una tarea de fondo (Polling)
+            background_tasks.add_task(sri_service.consultar_y_actualizar_autorizacion, clave, factura.ambiente)
+            
+            # 9. Devolver respuesta INMEDIATA (200 OK) al usuario
+            return {
+                "estado": "RECIBIDA", 
+                "clave_acceso": clave,
+                "mensaje": "Comprobante recibido por el SRI. El estado final se actualizará en 5-30 segundos."
+            }
+                
+        elif envio_resultado['estado'] == 'DEVUELTA':
+            # 7. Rechazo inmediato (No consume crédito).
+            database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, "DEVUELTA")
+            raise HTTPException(400, f"SRI DEVUELTA (Error de Recepción): {envio_resultado.get('errores', ['Error desconocido'])}")
+            
+        else:
+             # 7. Otro error (conexión, etc.)
+             raise HTTPException(500, f"Error al enviar al SRI: {envio_resultado['mensaje']}")
+
+
     except Exception as e:
+        # Esto captura errores de Firma, Secuencial, Cifrado/Descifrado, etc.
+        # Es muy importante que este bloque final capture errores y los devuelva al usuario.
         raise HTTPException(400, str(e))
 
 @app.post("/admin/recargar")
@@ -428,6 +471,7 @@ def eliminar_configuracion_empresa(user: dict = Depends(get_current_user)):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al eliminar la configuración: {str(e)}")
+
 
 
 
