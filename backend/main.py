@@ -277,14 +277,29 @@ def eliminar_configuracion_empresa(user: dict = Depends(get_current_user)): # <-
 
 
 @app.get("/saldo-facturas")
-def consultar_saldo(user: dict = Depends(get_current_user)): # <--- JWT
+async def obtener_saldo_facturas(current_user: dict = Depends(get_current_user)):
     """
-    Permite al usuario logueado consultar cuántas facturas tiene disponibles.
+    Devuelve el saldo de facturas del usuario autenticado.
+    ACTUALIZADO: Ahora también devuelve la API Key persistente.
     """
-    return {
-        "creditos_disponibles": user.get('creditos', 0),
-        "ruc_empresa": user.get('ruc')
-    }
+    try:
+        # Buscar el usuario en la base de datos
+        usuario = db_users.find_one({"email": current_user["email"]})
+        
+        if not usuario:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        
+        # Retornar datos completos del usuario
+        return {
+            "creditos_disponibles": usuario.get("creditos_disponibles", 0),
+            "ruc_usuario": usuario.get("ruc"),
+            "api_key_persistente": usuario.get("api_key_persistente"),  # ← CRÍTICO
+            "configuracion_completa": usuario.get("firma_path") is not None
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al consultar saldo: {str(e)}")
+        
     
 @app.post("/generar-api-key")
 def generar_nueva_api_key(user: dict = Depends(get_current_user)): # <--- JWT
@@ -573,4 +588,5 @@ def descargar_comprobante_publico(clave_acceso: str, tipo: str = "pdf"):
         )
         
     raise HTTPException(status_code=400, detail="Tipo de descarga inválido. Use 'pdf' o 'xml'.")
+
 
