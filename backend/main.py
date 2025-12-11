@@ -337,3 +337,10 @@ def montos_ganados():
     # RECUERDA: Agregar autenticación de administrador aquí
     total = database.obtener_monto_total_ganado()
     return {"monto_total_usd": total}
+
+# En main.py, agregar este endpoint:
+@app.get("/historial-facturas")
+def historial_facturas(user: dict = Depends(get_current_user)):
+    """Muestra la lista de comprobantes emitidos por el usuario."""
+    historial = database.obtener_historial_comprobantes(user['id'])
+    return {"facturas": historial}
