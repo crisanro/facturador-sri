@@ -209,8 +209,8 @@ def configurar_empresa(
         valido, msg = firmador.validar_archivo_p12(path_completo, clave_firma, ruc) 
     
         if not valido:
-        if os.path.exists(path_completo): os.remove(path_completo)
-        raise HTTPException(400, f"Error en firma: {msg}")
+            if os.path.exists(path_completo): os.remove(path_completo)
+            raise HTTPException(400, f"Error en firma: {msg}")
         
         # --- LÓGICA DE ENCRIPTACIÓN: Cifrar la clave ---
         # 2. Cifrar la clave de texto plano (clave_firma) usando Fernet
@@ -387,6 +387,7 @@ def generar_nueva_api_key(user: dict = Depends(get_current_user)):
         return {"mensaje": "API Key generada exitosamente.", "api_key": new_key}
     
     raise HTTPException(500, "Error al guardar la nueva clave en la base de datos.")
+
 
 
 
