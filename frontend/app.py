@@ -1,3 +1,4 @@
+
 import streamlit as st
 import requests
 import os
@@ -319,9 +320,9 @@ def show_configuracion():
         with col1:
             st.metric("RUC", config.get("ruc", "N/A"))
         with col2:
-            st.metric("Razón Social", config.get("razon_social", "N/A"))
-        firma_path = config.get("firma_path") or ''    
-        st.caption(f"Archivo .p12 asociado: {os.path.basename(firma_path)}")
+            st.metric("Razón Social", config.get("razon_social", "—"))
+        firma_path = config.get("firma_path") or ''
+        st.caption(f"Archivo .p12 asociado: {os.path.basename(firma_path) or 'No configurado'}")
         
         st.markdown("---")
         
@@ -611,5 +612,6 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
 
 
