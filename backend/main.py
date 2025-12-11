@@ -164,7 +164,9 @@ def configurar_empresa(
             if os.path.exists(path): os.remove(path)
             raise HTTPException(400, f"Error en firma: {msg}")
             
-        database.completar_datos_empresa(usuario_actual['email'], ruc, razon_social, path, clave_firma)
+        hash_clave_firma = auth.get_password_hash(clave_firma)    
+        database.completar_datos_empresa(usuario_actual['email'], ruc, razon_social, path, 
+    hash_clave_firma)
         return {"mensaje": "Empresa configurada exitosamente."}
         
     except Exception as e:
@@ -227,3 +229,17 @@ def consultar_ruc_endpoint(ruc: str):
     # Si devuelve error, igual respondemos 200 pero con valido=False
     # para que el frontend muestre el mensaje bonito en rojo
     return datos
+
+@app.get("/saldo-facturas")
+def consultar_saldo(user: dict = Depends(get_current_user)):
+    """
+    Permite al usuario logueado consultar cuántas facturas tiene disponibles.
+    """
+    # El diccionario 'user' ya contiene todos los datos del usuario, incluyendo 'creditos'.
+    # Si quieres evitar devolver información sensible (como la firma_path o hash_pass),
+    # puedes seleccionar los campos, pero para simplicidad, usamos lo que ya tenemos.
+    
+    return {
+        "creditos_disponibles": user.get('creditos', 0),
+        "ruc_empresa": user.get('ruc')
+    }
