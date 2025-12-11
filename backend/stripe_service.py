@@ -16,9 +16,9 @@ CREDITOS = {
     1800: 100, # $18.00 (1800 centavos) = 100 facturas
 }
 
-def crear_sesion_checkout(user_id, ruc_cliente, cantidad_creditos):
+def crear_sesion_checkout(user_id, ruc_cliente, email_cliente, cantidad_creditos):
     """
-    Crea una sesión de checkout de Stripe.
+    Crea una sesión de checkout de Stripe, incluyendo el email del cliente.
     """
     precio_centavos = PRECIOS.get(cantidad_creditos)
     if not precio_centavos:
@@ -27,6 +27,7 @@ def crear_sesion_checkout(user_id, ruc_cliente, cantidad_creditos):
     try:
         session = stripe.checkout.Session.create(
             payment_method_types=['card'],
+            customer_email=email_cliente, # <--- ¡CLAVE! Pre-llena y guarda el email de tu cliente
             line_items=[{
                 'price_data': {
                     'currency': 'usd',
@@ -38,10 +39,8 @@ def crear_sesion_checkout(user_id, ruc_cliente, cantidad_creditos):
                 'quantity': 1,
             }],
             mode='payment',
-            # Usamos el RUC como referencia para saber a quién recargar
             success_url=f'http://tudominio.com/compra-exitosa?ruc={ruc_cliente}',
             cancel_url='http://tudominio.com/compra-cancelada',
-            # Metadatos para el webhook
             metadata={
                 'ruc': ruc_cliente,
                 'user_id': user_id,
