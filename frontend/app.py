@@ -306,81 +306,120 @@ def generar_opciones_descarga_ui(clave_acceso, estado):
 
 
 def show_configuracion():
-    """Solo muestra la configuración de la firma electrónica"""
-    # 1. Obtener el estado actual de la configuración
+    """Muestra y permite editar la configuración de firma electrónica"""
     config = obtener_configuracion_api()
     
     st.subheader("Firma Electrónica y Datos de Facturación")
 
     is_configurada = config.get("configurada", False)
     
-    # Manejar el error de NoneType al principio
-    firma_path = config.get("firma_path") or ''
-    nombre_archivo = os.path.basename(firma_path) if firma_path else 'No configurado'
-
     if is_configurada:
-        # --- CONFIGURACIÓN EXISTENTE ---
+        # ===== MODO EDICIÓN =====
         st.success("✅ Configuración de empresa registrada y vigente.")
         
+        # Mostrar datos actuales
         col1, col2 = st.columns(2)
         with col1:
             st.metric("RUC", config.get("ruc", "—"))
         with col2:
             st.metric("Razón Social", config.get("razon_social", "—"))
-            
-        st.caption(f"Archivo .p12 asociado: **{nombre_archivo}**")
+        
+        firma_path = config.get("firma_path") or ''
+        nombre_archivo = os.path.basename(firma_path) if firma_path else 'No configurado'
+        st.caption(f"📄 Archivo .p12 actual: **{nombre_archivo}**")
         
         st.markdown("---")
         
-        st.warning("Si su firma ha expirado o desea cambiar la clave, elimine la configuración actual.")
-        if st.button("🔴 Eliminar Configuración Actual", type="secondary"):
-            if "confirm_delete" not in st.session_state:
-                st.session_state.confirm_delete = True
-                st.rerun()
+        # OPCIÓN 1: Editar solo la firma (mantener RUC y Razón Social)
+        with st.expander("🔄 Actualizar Firma Electrónica"):
+            st.info("Si su firma ha expirado, puede actualizarla aquí sin cambiar los demás datos.")
+            with st.form("actualizar_firma_form"):
+                nueva_clave = st.text_input("Nueva Clave de Firma", type="password")
+                nuevo_archivo = st.file_uploader(
+                    "Subir Nueva Firma (.p12)", 
+                    type=["p12"],
+                    help="Tamaño máximo: 100 KB"
+                )
+                
+                if st.form_submit_button("Actualizar Firma", type="primary"):
+                    if not nueva_clave or not nuevo_archivo:
+                        st.error("Complete todos los campos.")
+                    elif nuevo_archivo.size > 100 * 1024:  # 100 KB en bytes
+                        st.error("⚠️ El archivo supera el tamaño máximo de 100 KB.")
+                    else:
+                        # Reutilizar RUC y Razón Social existentes
+                        success, msg = configurar_empresa_api(
+                            config.get("ruc"),
+                            config.get("razon_social"),
+                            nueva_clave,
+                            nuevo_archivo
+                        )
+                        if success:
+                            st.success(msg)
+                            obtener_configuracion_api.clear()
+                            time.sleep(1)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+        
+        # OPCIÓN 2: Eliminar todo y reconfigurar desde cero
+        st.markdown("---")
+        st.warning("⚠️ **Eliminar toda la configuración** (incluye RUC, Razón Social y Firma)")
+        
+        if st.button("🗑️ Eliminar Configuración Completa", type="secondary"):
+            st.session_state.confirm_delete = True
             
         if st.session_state.get("confirm_delete"):
-            st.error("⚠️ ¿Está seguro que desea ELIMINAR la configuración de firma?")
+            st.error("⚠️ ¿Está seguro? Esta acción eliminará **todos** los datos de configuración.")
             col_del, col_cancel = st.columns(2)
             with col_del:
-                if st.button("SÍ, Eliminar", key="confirm_del_btn", type="primary"):
+                if st.button("SÍ, Eliminar Todo", key="confirm_del_btn", type="primary"):
                     success, msg = eliminar_configuracion_api()
                     if success:
                         st.session_state.confirm_delete = False
-                        st.success("Configuración eliminada. Proceda a reconfigurar.")
-                        obtener_configuracion_api.clear() 
+                        st.success(msg)
+                        obtener_configuracion_api.clear()
+                        time.sleep(1)
                         st.rerun()
                     else:
                         st.error(msg)
             with col_cancel:
-                if st.button("NO, Cancelar", key="cancel_del_btn"):
+                if st.button("Cancelar", key="cancel_del_btn"):
                     st.session_state.confirm_delete = False
                     st.rerun()
 
     else:
-        # --- FORMULARIO DE NUEVA CONFIGURACIÓN ---
-        st.warning("⚠️ Su empresa no está configurada para facturar. Suba su archivo de firma.")
+        # ===== MODO CREACIÓN (Primera vez) =====
+        st.warning("⚠️ Su empresa no está configurada. Complete el formulario para empezar a facturar.")
         
         with st.form("config_empresa_form", clear_on_submit=True):
-            ruc = st.text_input("RUC (Ecuador)", max_chars=13)
-            razon_social = st.text_input("Razón Social / Nombre Comercial")
+            ruc = st.text_input("RUC (Ecuador)", max_chars=13, placeholder="1234567890001")
+            razon_social = st.text_input("Razón Social / Nombre Comercial", placeholder="Mi Empresa S.A.")
             clave_firma = st.text_input("Clave de la Firma Electrónica", type="password")
-            archivo_firma = st.file_uploader("Subir Archivo de Firma (.p12)", type="p12")
+            archivo_firma = st.file_uploader(
+                "Subir Archivo de Firma (.p12)", 
+                type=["p12"],
+                help="Tamaño máximo: 100 KB"
+            )
             
-            submitted = st.form_submit_button("Guardar Configuración", type="primary")
+            submitted = st.form_submit_button("💾 Guardar Configuración", type="primary")
 
             if submitted:
                 if not all([ruc, razon_social, clave_firma, archivo_firma]):
-                    st.error("Complete todos los campos.")
+                    st.error("❌ Por favor, complete todos los campos.")
+                elif len(ruc) != 13:
+                    st.error("❌ El RUC debe tener exactamente 13 dígitos.")
+                elif archivo_firma.size > 100 * 1024:  # 100 KB
+                    st.error(f"⚠️ El archivo pesa {archivo_firma.size / 1024:.1f} KB. Máximo permitido: 100 KB.")
                 else:
                     success, msg = configurar_empresa_api(ruc, razon_social, clave_firma, archivo_firma)
                     if success:
                         st.success(msg)
-                        obtener_configuracion_api.clear() 
+                        obtener_configuracion_api.clear()
+                        time.sleep(1)
                         st.rerun()
                     else:
                         st.error(msg)
-                        
-    st.markdown("---")
 
 
 def show_dashboard():
@@ -490,36 +529,55 @@ def generar_api_key_api():
 
 # Y ahora la función de interfaz:
 def show_api_key():
+    """Muestra la API Key persistente del usuario"""
     st.subheader("🔑 Token de Autorización (API Key)")
     
-    # Clave de la API persistente (ya cargada desde el backend)
-    current_api_key = st.session_state.get('api_key')
+    # Intentar obtener la API key actual (puede venir del login o del endpoint de saldo)
+    api_key_actual = st.session_state.get('api_key')
     
-    if current_api_key:
-        st.markdown("Esta es tu clave secreta de acceso persistente. **No expira.**")
-        st.code(current_api_key, language="text")
+    # Si no está en la sesión, intentar obtenerla del backend
+    if not api_key_actual:
+        saldo_data = consultar_saldo_api(st.session_state.token)
+        if saldo_data:
+            api_key_actual = saldo_data.get('api_key_persistente')
+            st.session_state.api_key = api_key_actual  # Guardarla en sesión
+    
+    if api_key_actual:
+        st.success("✅ Tu API Key está activa y lista para usar.")
+        st.markdown("Esta clave **nunca expira** y puedes usarla para integrar sistemas externos.")
+        st.code(api_key_actual, language="text")
         
-        # Corrección 1: Botón de Regenerar (Clave única)
-        if st.button("🔄 Regenerar Clave Secreta (¡Cuidado!)", 
-                     key="config_api_regenerar_btn",  # Usamos un prefijo claro
-                     help="Esto anulará la clave anterior"):
-             res = generar_api_key_api()
-             if res:
-                 st.session_state.api_key = res['api_key'] 
-                 st.success("Nueva clave generada. ¡Recarga la página para usarla!")
-                 st.rerun()
-
-    else:
-        st.warning("Aún no tienes una clave de API persistente. ¡Genérala para conectar sistemas externos!")
+        # Botón de copiar (usando un truco de HTML)
+        st.markdown(f"""
+        <button onclick="navigator.clipboard.writeText('{api_key_actual}')" 
+                style="background-color: #007bff; color: white; padding: 8px 15px; 
+                       border: none; border-radius: 5px; cursor: pointer; font-weight: bold;">
+            📋 Copiar al Portapapeles
+        </button>
+        """, unsafe_allow_html=True)
         
-        # Corrección 2: Botón de Generar Inicialmente (Clave única)
-        if st.button("✨ Generar Clave API", key="config_api_generar_btn_initial"): # Usamos un prefijo claro
+        st.markdown("---")
+        st.warning("⚠️ **Regenerar la clave anulará la anterior.** Úsalo solo si la clave fue comprometida.")
+        
+        if st.button("🔄 Regenerar API Key", key="regenerar_api_key_btn"):
             res = generar_api_key_api()
             if res:
-                st.session_state.api_key = res['api_key'] 
-                st.success("Clave generada. ¡Ya puedes copiarla!")
+                st.session_state.api_key = res['api_key']
+                st.success("✅ Nueva clave generada exitosamente.")
+                time.sleep(1)
                 st.rerun()
-
+    else:
+        st.info("📌 Aún no tienes una API Key. Genera una para conectar sistemas externos.")
+        
+        if st.button("✨ Generar Mi Primera API Key", key="generar_api_key_inicial_btn", type="primary"):
+            res = generar_api_key_api()
+            if res:
+                st.session_state.api_key = res['api_key']
+                st.balloons()
+                st.success("✅ ¡API Key generada! Ya puedes usarla.")
+                time.sleep(1)
+                st.rerun()
+    
     st.markdown("---")
     
 # ==========================================
@@ -627,6 +685,7 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
 
 
 
