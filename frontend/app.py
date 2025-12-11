@@ -73,6 +73,56 @@ def emitir_factura_api(payload):
     except Exception as e:
         return None
 
+# --- NUEVAS FUNCIONES DE CONEXIÓN DE DATOS ---
+
+def consultar_saldo_api():
+    """Consulta los créditos disponibles."""
+    headers = {"Authorization": f"Bearer {st.session_state.token}"}
+    try:
+        res = requests.get(f"{BACKEND_URL}/saldo-facturas", headers=headers)
+        if res.status_code == 200:
+            return res.json()
+        return None
+    except:
+        return None
+
+def obtener_historial_facturas_api():
+    """Consulta el historial de facturas generadas."""
+    headers = {"Authorization": f"Bearer {st.session_state.token}"}
+    try:
+        res = requests.get(f"{BACKEND_URL}/historial-facturas", headers=headers)
+        if res.status_code == 200:
+            return res.json().get('facturas', [])
+        return []
+    except:
+        return []
+
+def obtener_historial_recargas_api():
+    """Consulta el historial de pagos y recargas."""
+    headers = {"Authorization": f"Bearer {st.session_state.token}"}
+    try:
+        res = requests.get(f"{BACKEND_URL}/historial-recargas", headers=headers)
+        if res.status_code == 200:
+            return res.json().get('historial', [])
+        return []
+    except:
+        return []
+        
+def crear_sesion_compra_api(cantidad):
+    """Llama al backend para iniciar el proceso de Stripe."""
+    headers = {"Authorization": f"Bearer {st.session_state.token}"}
+    try:
+        res = requests.post(f"{BACKEND_URL}/comprar-facturas", json={"cantidad": cantidad}, headers=headers)
+        if res.status_code == 200:
+            return res.json().get("checkout_url")
+        st.error(f"Error al iniciar pago: {res.json().get('detail')}")
+        return None
+    except Exception as e:
+        st.error(f"Error de conexión: {e}")
+        return None
+
+
+
 # ==========================================
 #              INTERFAZ DE USUARIO
 # ==========================================
@@ -293,6 +343,135 @@ else:
             elif res:
                 st.error(f"Error: {res.text}")
 
+    # --- 5. MÓDULOS DE INTERFAZ (Para limpiar la vista principal) ---
+
+def show_dashboard():
+    st.subheader("📊 Resumen General")
+    
+    # 1. Obtener y mostrar SALDOS
+    saldo_data = consultar_saldo_api()
+    creditos_disp = saldo_data['creditos_disponibles'] if saldo_data else 0
+    
+    # Obtener el total de facturas generadas (para métrica)
+    historial_facturas = obtener_historial_facturas_api()
+    
+    col_a, col_b, col_c = st.columns(3)
+    
+    with col_a:
+        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #00c087;">'
+                    f'<h4>Créditos Restantes</h4><h1>{creditos_disp}</h1></div>', 
+                    unsafe_allow_html=True)
+    
+    with col_b:
+        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #007bff;">'
+                    f'<h4>Facturas Emitidas</h4><h1>{len(historial_facturas)}</h1></div>', 
+                    unsafe_allow_html=True)
+                    
+    with col_c:
+        # Se necesita un endpoint de totales de ventas en el backend para hacer esto real
+        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #ffaa00;">'
+                    f'<h4>Ventas Estimadas (SRI)</h4><h1>$0.00</h1></div>', 
+                    unsafe_allow_html=True)
+
+    # 2. Historial de facturas
+    st.markdown("---")
+    st.subheader("📝 Historial de Facturas Generadas")
+    
+    if historial_facturas:
+        # Convertir a DataFrame de Pandas para una mejor visualización en Streamlit
+        import pandas as pd
+        df = pd.DataFrame(historial_facturas)
+        df['fecha_creacion'] = pd.to_datetime(df['fecha_creacion']).dt.strftime('%Y-%m-%d %H:%M')
+        
+        # Ocultamos el XML largo
+        df_display = df[['fecha_creacion', 'clave_acceso', 'tipo_comprobante', 'estado']]
+        
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+    else:
+        st.info("Aún no has generado ninguna factura electrónica.")
+
+
+def show_compras():
+    st.subheader("🛒 Comprar Créditos (Recarga)")
+    
+    st.markdown("Selecciona el paquete de facturas que deseas recargar. Serás redirigido a la pasarela de pago segura de Stripe.")
+    
+    col_p1, col_p2 = st.columns(2)
+    
+    # Paquete 1: 50 Créditos
+    with col_p1:
+        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #ff4b4b;">'
+                    f'<h4>50 Facturas</h4><h1>$10.00 USD</h1>'
+                    f'<p>Ideal para negocios pequeños.</p></div>', 
+                    unsafe_allow_html=True)
+        if st.button("Comprar 50 Créditos", key="buy50", type="primary"):
+            url = crear_sesion_compra_api(50)
+            if url:
+                st.info(f"Redirigiendo a Stripe... [Haz clic aquí]({url})")
+                # Aquí puedes usar st.link_button en versiones recientes de Streamlit o js para redirigir
+                # st.link_button("Ir a Pagar", url)
+
+    # Paquete 2: 100 Créditos
+    with col_p2:
+        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #3366ff;">'
+                    f'<h4>100 Facturas</h4><h1>$18.00 USD</h1>'
+                    f'<p>Ahorro de $2.00. El mejor valor.</p></div>', 
+                    unsafe_allow_html=True)
+        if st.button("Comprar 100 Créditos", key="buy100", type="primary"):
+            url = crear_sesion_compra_api(100)
+            if url:
+                st.info(f"Redirigiendo a Stripe... [Haz clic aquí]({url})")
+                # st.link_button("Ir a Pagar", url)
+
+    st.markdown("---")
+    st.subheader("🧾 Historial de Compras")
+    historial_recargas = obtener_historial_recargas_api()
+    if historial_recargas:
+        import pandas as pd
+        df_recargas = pd.DataFrame(historial_recargas)
+        st.dataframe(df_recargas, use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay recargas registradas.")
+
+
+def show_facturacion_form():
+    st.subheader("📝 Nueva Factura")
+    # ... (MANTENER AQUÍ EL CÓDIGO DEL FORMULARIO DE FACTURACIÓN) ...
+    # Copia toda la lógica del formulario de factura de tu app.py original aquí.
+    # El código es extenso, asumimos que lo moverás tal cual.
+    # ... (Si el usuario me envía el form completo, lo incluyo) ...
+
+def show_configuracion():
+    # ... (MANTENER AQUÍ EL CÓDIGO DE ONBOARDING/CONFIGURACIÓN) ...
+    # Copia toda la lógica del `with st.expander("🚀 CONFIGURAR MI EMPRESA ...")`
+    # y la lógica de búsqueda de RUC de tu app.py original aquí.
+    # ...
+
+# --- 6. FLUJO PRINCIPAL RE-ESTRUCTURADO ---
+
+if not st.session_state.token:
+    # Usar el código de Login/Registro/Verificación (ESCENA 1)
+    pass # Asumo que el código de Login se mantiene intacto.
+else:
+    # ESCENA 2: DENTRO DEL SISTEMA
+    # ... (Header y Cerrar Sesión se mantienen) ...
+
+    # Si la configuración está incompleta, forzamos la configuración
+    if not st.session_state.config_completa:
+        show_configuracion() 
+    else:
+        # Pestañas principales para navegar
+        tab_dash, tab_fact, tab_compras = st.tabs(["Panel General", "Facturación", "Comprar Créditos"])
+
+        with tab_dash:
+            show_dashboard()
+            
+        with tab_fact:
+            show_facturacion_form()
+            
+        with tab_compras:
+            show_compras()
+
     # === PANEL ADMIN SECRETO (Solo visible para ti) ===
     # Compara el RUC logueado con el RUC_ADMIN que definiste arriba
     if st.session_state.empresa_ruc == RUC_ADMIN:
@@ -304,3 +483,4 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
