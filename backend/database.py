@@ -180,13 +180,14 @@ def obtener_siguiente_secuencial(empresa_id, serie):
     finally: cursor.close(); conn.close()
 
 # MODIFICACIÓN: Aceptar el estado del SRI para guardarlo
-def guardar_factura_bd(empresa_id, clave, tipo, xml, estado_sri="CREADO"): 
+def guardar_factura_bd(empresa_id, clave, tipo, xml, estado_inicial='CREADO'): # Agregamos 'estado_inicial'
     conn = get_db_connection()
     if not conn: return False
     cursor = conn.cursor()
     try:
+        # Insertamos el estado inicial recibido del WS de Recepción
         sql = "INSERT INTO comprobantes (empresa_id, clave_acceso, tipo_comprobante, xml_generado, estado) VALUES (%s, %s, %s, %s, %s)"
-        cursor.execute(sql, (empresa_id, clave, tipo, xml, estado_sri))
+        cursor.execute(sql, (empresa_id, clave, tipo, xml, estado_inicial))
         conn.commit()
         return True
     except Error: return False
@@ -337,3 +338,4 @@ def generar_api_key(user_id: int):
     finally: 
         cursor.close()
         conn.close()
+
