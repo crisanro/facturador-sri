@@ -20,7 +20,7 @@ from contextlib import asynccontextmanager
 import stripe_service
 import sri_service
 from fastapi.security import APIKeyHeader
-
+import encryption
 
 # Importamos nuestros módulos locales
 import utils_sri, xml_builder, database, auth, firmador
@@ -183,7 +183,7 @@ def login(datos: LoginEmail):
 def configurar_empresa(
     ruc: str = Form(...),
     razon_social: str = Form(...),
-    clave_firma: str = Form(...),
+    clave_firma: str = Form(...), # <-- Clave de la firma en texto plano
     archivo_firma: UploadFile = File(...),
     usuario_actual: dict = Depends(get_current_user)
 ):
@@ -206,16 +206,25 @@ def configurar_empresa(
             shutil.copyfileobj(archivo_firma.file, f) # Usar copyfileobj es eficiente
         
         # 3. Validar la firma usando la RUTA ABSOLUTA
-        valido, msg = firmador.validar_archivo_p12(path_completo, clave_firma, ruc)
-        
+        valido, msg = firmador.validar_archivo_p12(path_completo, clave_firma, ruc) 
+    
         if not valido:
-            if os.path.exists(path_completo): os.remove(path_completo)
-            raise HTTPException(400, f"Error en firma: {msg}")
-            
-        # 4. Guardar la RUTA ABSOLUTA en la base de datos
-        hash_clave_firma = auth.get_password_hash(clave_firma)  
-        database.completar_datos_empresa(usuario_actual['email'], ruc, razon_social, path_completo, hash_clave_firma)
+        if os.path.exists(path_completo): os.remove(path_completo)
+        raise HTTPException(400, f"Error en firma: {msg}")
         
+        # --- LÓGICA DE ENCRIPTACIÓN: Cifrar la clave ---
+        # 2. Cifrar la clave de texto plano (clave_firma) usando Fernet
+        clave_firma_cifrada = encryption.encrypt_data(clave_firma)
+    
+        # 3. Guardar la RUTA ABSOLUTA y la CLAVE CIFRADA en la base de datos
+        database.completar_datos_empresa(
+            usuario_actual['email'], 
+            ruc, 
+            razon_social, 
+            path_completo, 
+            clave_firma_cifrada # <-- ¡Guardar la versión CIFRADA!
+        )
+    
         return {"mensaje": "Empresa configurada exitosamente."}
         
     except Exception as e:
@@ -378,6 +387,7 @@ def generar_nueva_api_key(user: dict = Depends(get_current_user)):
         return {"mensaje": "API Key generada exitosamente.", "api_key": new_key}
     
     raise HTTPException(500, "Error al guardar la nueva clave en la base de datos.")
+
 
 
 
