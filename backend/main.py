@@ -254,7 +254,7 @@ def emitir_factura(factura: FacturaCompleta,
         clave_firma_descifrada = encryption.decrypt_data(user['firma_clave']).strip()
         
         # 2. Obtener secuencial y ajustar la factura
-       secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
+        secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
         factura.secuencial = secuencial
         factura.ruc = user['ruc'] # Aseguramos consistencia
 
@@ -585,5 +585,6 @@ def eliminar_configuracion_empresa(user: dict = Depends(get_current_user)):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al eliminar la configuración: {str(e)}")
+
 
 
