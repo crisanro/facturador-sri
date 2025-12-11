@@ -221,7 +221,7 @@ def configurar_empresa(
         raise HTTPException(500, str(e))
 
 @app.post("/emitir-factura")
-def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_user)):
+def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_user_api_key)):
     if not user['ruc']: 
         raise HTTPException(400, "Falta configurar empresa.")
     
@@ -562,6 +562,7 @@ def eliminar_configuracion_empresa(user: dict = Depends(get_current_user)):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al eliminar la configuración: {str(e)}")
+
 
 
 
