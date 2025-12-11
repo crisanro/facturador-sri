@@ -4,7 +4,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import pkcs12
 import os
 from datetime import timezone
-from endesive.xades import bes
+
 # ... (La función encontrar_certificado_valido no necesita cambios, aunque ya no será estrictamente necesaria para validar, sí lo es para firmar).
 
 def encontrar_certificado_valido(cert_principal, certs_adicionales):
@@ -56,28 +56,11 @@ def firmar_xml(xml_string, ruta_p12, password_p12):
             'cert_info': True,
             'signing_time': datetime.datetime.now(datetime.timezone.utc)
         }
+        # Endesive espera el XML en bytes
+        xml_bytes = xml_string.encode('utf-8')    
         
         # 4. CORRECCIÓN CLAVE: Usamos 'xades.bes.sign' y simplificamos los parámetros
         # Pasamos el XML, la clave privada, el certificado del usuario y las opciones.
-        # El certificado adicional ya no se pasa aquí, la librería lo maneja.
-        
-        # Endesive espera el XML en bytes
-        xml_bytes = xml_string.encode('utf-8') 
-        
-        # ¡CORRECCIÓN EN ESTA LÍNEA!
-        xml_firmado = xades.bes.sign(
-            xml_bytes, 
-            private_key, 
-            user_certificate, # Certificado principal a usar
-            signature_options,
-            # Asegúrate de que additional_certificates no se use si no es necesario por la firma
-        )
-        
-        # Si el certificado principal es el único que importa:
-        # xml_firmado = xades.bes.sign(xml_bytes, private_key, user_certificate, signature_options)
-
-        # Usamos el original del código que nos diste, reemplazando sign_xml por sign
-        # PERO quitando additional_certificates si Endesive no lo requiere en esa versión.
 
         # Versión más probable que funcione con tu versión de Endesive:
         xml_firmado = xades.bes.sign(
@@ -133,5 +116,6 @@ def validar_archivo_p12(ruta_p12, password, ruc_usuario):
         return False, "Contraseña de la firma incorrecta."
     except Exception as e:
         return False, f"Error leyendo firma: {str(e)}"
+
 
 
