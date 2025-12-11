@@ -287,16 +287,13 @@ class CompraCreditos(BaseModel):
 
 @app.post("/comprar-facturas")
 def comprar_creditos(datos: CompraCreditos, user: dict = Depends(get_current_user)):
-    """
-    Genera la URL de Checkout de Stripe para el pago.
-    """
-    if not user['ruc']: 
-        raise HTTPException(400, "Falta configurar empresa para comprar créditos.")
-        
+    # ... (Chequeos iniciales) ...
+
     checkout_url = stripe_service.crear_sesion_checkout(
         user['id'], 
         user['ruc'], 
-        datos.cantidad
+        user['email'], 
+        datos.cantidad 
     )
     
     if checkout_url:
@@ -344,3 +341,4 @@ def historial_facturas(user: dict = Depends(get_current_user)):
     """Muestra la lista de comprobantes emitidos por el usuario."""
     historial = database.obtener_historial_comprobantes(user['id'])
     return {"facturas": historial}
+
