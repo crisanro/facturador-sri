@@ -203,8 +203,8 @@ def configurar_empresa(
 
 @app.post("/emitir-factura")
 def emitir_factura(factura: FacturaCompleta, 
-                   user: dict = Depends(get_current_user_api_key), 
-                   background_tasks: BackgroundTasks):
+                   background_tasks: BackgroundTasks, # <-- Mover aquí
+                   user: dict = Depends(get_current_user_api_key)):
     if not user['ruc']: 
         raise HTTPException(400, "Falta configurar empresa.")
     
@@ -381,6 +381,7 @@ def historial_facturas(user: dict = Depends(get_current_user)):
     """Muestra la lista de comprobantes emitidos por el usuario."""
     historial = database.obtener_historial_comprobantes(user['id'])
     return {"facturas": historial}
+
 
 
 
