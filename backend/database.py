@@ -57,7 +57,18 @@ def inicializar_tablas():
     
     sql_puntos = """CREATE TABLE IF NOT EXISTS puntos_emision (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT, serie VARCHAR(6) NOT NULL, ultimo_secuencial INT DEFAULT 0, FOREIGN KEY (empresa_id) REFERENCES empresas(id), UNIQUE(empresa_id, serie));"""
     sql_comprobantes = """CREATE TABLE IF NOT EXISTS comprobantes (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT, clave_acceso VARCHAR(49) NOT NULL UNIQUE, tipo_comprobante VARCHAR(2) NOT NULL, xml_generado LONGTEXT, estado VARCHAR(20) DEFAULT 'CREADO', fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (empresa_id) REFERENCES empresas(id));"""
-
+    sql_transacciones = """
+    CREATE TABLE IF NOT EXISTS transacciones (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        empresa_id INT NOT NULL,
+        monto_usd DECIMAL(10, 2) NOT NULL,
+        creditos_recargados INT NOT NULL,
+        estado VARCHAR(50) DEFAULT 'COMPLETADO',
+        referencia_pago VARCHAR(255) NULL, -- ID de sesión de Stripe
+        fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (empresa_id) REFERENCES empresas(id)
+    );
+    """
     try:
         cursor.execute(sql_empresas)
         cursor.execute(sql_puntos)
@@ -200,4 +211,5 @@ def recargar_creditos(ruc, cantidad):
         return True
     except Error: return False
     finally: cursor.close(); conn.close()
+
 
