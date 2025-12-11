@@ -6,6 +6,8 @@ from zeep.exceptions import Fault
 import logging
 import time
 from typing import Tuple
+import database 
+import ride_generator
 
 # Configuramos logging para ver errores si algo falla
 logging.basicConfig()
@@ -100,3 +102,55 @@ def consultar_autorizacion(clave_acceso: str) -> Tuple[str, str, str]:
         
     except Exception as e:
         return "ERROR_CONEXION", clave_acceso, f"Fallo al consultar autorización: {str(e)}"
+
+# Constantes de Polling
+MAX_ATTEMPTS = 5
+DELAY_SECONDS = 5
+
+def iniciar_polling_autorizacion(clave_acceso: str, ambiente: int):
+    """
+    Maneja el polling en segundo plano, actualiza la BD y genera el PDF.
+    """
+    intentos = 0
+    estado_final = "EN PROCESO"
+    numero_autorizacion = None
+    xml_autorizado = None
+
+    print(f"[POLLING] Iniciando polling para clave: {clave_acceso}")
+
+    while intentos < MAX_ATTEMPTS:
+        time.sleep(DELAY_SECONDS)
+        intentos += 1
+        
+        resultado = consultar_autorizacion(clave_acceso, ambiente)
+
+        if resultado['estado'] == 'AUTORIZADO':
+            estado_final = 'AUTORIZADO'
+            numero_autorizacion = resultado.get('numero_autorizacion')
+            xml_autorizado = resultado.get('xml_autorizado')
+            break
+        
+        elif resultado['estado'] == 'NO AUTORIZADO':
+            estado_final = 'NO AUTORIZADO'
+            break
+        
+        elif resultado['estado'] in ['ERROR_CONSULTA', 'ERROR_HTTP']:
+            # Detener el polling si hay un error grave en la consulta
+            estado_final = 'FALLO_CONSULTA'
+            break
+
+    # 1. Procesar resultado final y generar PDF si está autorizado
+    pdf_path = None
+    if estado_final == 'AUTORIZADO':
+        # Simular la generación del PDF (RIDE)
+        pdf_path = ride_generator.generar_pdf_ride(clave_acceso)
+
+    # 2. Actualizar base de datos con el estado final
+    database.actualizar_estado_factura(
+        clave_acceso,
+        estado_final,
+        numero_autorizacion,
+        xml_autorizado,
+        pdf_path # Guarda la ruta del PDF
+    )
+    print(f"[POLLING] Finalizado para {clave_acceso}. Estado final: {estado_final}")
