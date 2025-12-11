@@ -12,4 +12,6 @@ requests
 asn1crypto
 pyopenssl
 stripe
+signxml
+lxml
 
