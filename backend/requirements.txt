@@ -5,10 +5,11 @@ python-multipart
 python-jose[cryptography]
 passlib[bcrypt]
 bcrypt==4.0.1
-endesive==2.1.2
+endesive==2.19.2
 cryptography
 lxml
 requests
 asn1crypto
 pyopenssl
 stripe
+
