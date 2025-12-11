@@ -274,6 +274,12 @@ def emitir_factura(factura: FacturaCompleta,
         # 6. Enviar el comprobante a RECEPCIÓN
         envio_resultado = sri_service.enviar_comprobante(xml_firmado, factura.ambiente)
         
+        # DEBUG: Ver qué contiene la respuesta completa
+        print("=" * 60)
+        print("RESPUESTA COMPLETA DEL SRI:")
+        print(envio_resultado)
+        print("=" * 60)
+        
         if envio_resultado['estado'] == 'RECIBIDA':
             
             # Guardar en DB con estado RECIBIDA
@@ -346,6 +352,7 @@ def emitir_factura(factura: FacturaCompleta,
             status_code=500,
             detail=f"Error interno: {str(e)}"
         )
+
 
 # ============================================================================
 # ENDPOINT ADICIONAL: Ver detalles de una factura específica
@@ -454,6 +461,7 @@ def consultar_autorizacion_manual(
         "estado": resultado['estado'],
         "mensaje": resultado.get('mensaje', 'Aún en proceso')
     }
+
 
 @app.post("/admin/recargar")
 def recargar_saldo(datos: Recarga):
@@ -620,3 +628,4 @@ def eliminar_configuracion_empresa(user: dict = Depends(get_current_user)):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al eliminar la configuración: {str(e)}")
+
