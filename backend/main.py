@@ -151,22 +151,36 @@ def verificar_email(datos: VerificarCodigo):
 
 @app.post("/login")
 def login(datos: LoginEmail):
-    # ... (Validación y verificación de email existentes) ...
     
-    # Aquí estaba el error de indentación, ahora está alineado
-    tiene_empresa = user['ruc'] is not None
+    # --- 1. CONSULTA CRÍTICA: DEFINIR 'user' ---
+    # Si el usuario no existe, user será None. Si existe, contendrá el diccionario de la BD.
+    user = database.buscar_usuario_por_email(datos.email) 
+
+    if not user or not auth.verify_password(datos.password, user['password_hash']):
+        # Si el usuario es None o la clave falla, salimos con error 401.
+        raise HTTPException(401, "Credenciales incorrectas")
     
-    # --- Lógica de API Key: Generar si es NULL ---
+    if user['email_verificado'] == 0:
+        raise HTTPException(403, "Debes verificar tu email primero.")
+        
+    # --- 2. Lógica de API Key: Generar si es NULL ---
     if user['api_key'] is None:
         new_key = database.generar_api_key(user['id'])
-        user['api_key'] = new_key # Actualizar el dict de sesión
+        # Actualizamos el diccionario local 'user' para devolver la clave
+        user['api_key'] = new_key 
+        
+    # --- 3. Uso de 'user' (La línea donde estaba el error) ---
+    tiene_empresa = user['ruc'] is not None
+    
+    # Generar el JWT para la sesión web
+    token = auth.create_access_token({"sub": user['email']})
     
     return {
         "access_token": token, 
         "token_type": "bearer", 
         "configuracion_completa": tiene_empresa,
         "ruc_usuario": user['ruc'],
-        "api_key_persistente": user['api_key'] # Devolver la clave al frontend
+        "api_key_persistente": user['api_key'] # Devolver la clave estática
     }
 
 @app.post("/configurar-empresa")
@@ -381,6 +395,7 @@ def historial_facturas(user: dict = Depends(get_current_user)):
     """Muestra la lista de comprobantes emitidos por el usuario."""
     historial = database.obtener_historial_comprobantes(user['id'])
     return {"facturas": historial}
+
 
 
 
