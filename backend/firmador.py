@@ -200,7 +200,7 @@ def firmar_xml_manual_sha1(root, private_key, certificate, chain_certificates):
     x509_data = etree.SubElement(key_info, f"{{{ns_ds}}}X509Data")
     x509_cert = etree.SubElement(x509_data, f"{{{ns_ds}}}X509Certificate")
     
-    cert_der = certificate.public_bytes(serialization.Encoding.DER)
+    cert_der = certificate.public_bytes(serialization.Encoding.DER) 
     x509_cert.text = base64.b64encode(cert_der).decode('utf-8')
     
     # 8. Agregar propiedades XAdES
@@ -286,5 +286,6 @@ def agregar_propiedades_xades_manual(signature, certificate, signature_id):
     
     x509_serial = etree.SubElement(issuer_serial, f"{{{ns_ds}}}X509SerialNumber")
     x509_serial.text = str(certificate.serial_number)
+
 
 
