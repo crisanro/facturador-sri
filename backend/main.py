@@ -351,7 +351,7 @@ def historial_facturas(user: dict = Depends(get_current_user)): # <--- JWT
 
 
 # --- ENDPOINTS API REST PROGRAMÁTICA (REQUIERE API KEY) ---
-
+@app.post("/emitir-factura")
 def emitir_factura(factura: FacturaCompleta, 
                    user: dict = Depends(get_current_user_api_key), 
                    background_tasks: BackgroundTasks = BackgroundTasks()):
@@ -619,6 +619,7 @@ def descargar_comprobante_publico(clave_acceso: str, tipo: str = "pdf"):
         )
         
     raise HTTPException(status_code=400, detail="Tipo de descarga inválido. Use 'pdf' o 'xml'.")
+
 
 
 
