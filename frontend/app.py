@@ -2,11 +2,12 @@ import streamlit as st
 import requests
 import os
 import time
+import pandas as pd # <-- ¡Nuevo Import! Necesario para tablas profesionales
 
 # --- 1. CONFIGURACIÓN INICIAL ---
-# Ajusta el puerto si en tu backend usas 8000
 BACKEND_URL = os.getenv("API_URL", "http://facturador-backend:80") 
 RUC_ADMIN = "1760013210001" 
+IVA_RATE = 0.15 # Tasa de IVA actual en Ecuador
 
 st.set_page_config(page_title="Facturación SaaS", page_icon="🧾", layout="wide")
 
@@ -14,8 +15,16 @@ st.set_page_config(page_title="Facturación SaaS", page_icon="🧾", layout="wid
 st.markdown("""
     <style>
     .stButton>button { width: 100%; font-weight: bold; border-radius: 8px; }
-    .metric-card { background-color: #f0f2f6; padding: 15px; border-radius: 10px; margin-bottom: 10px; border-left: 5px solid #ff4b4b; }
-    .auth-container { max-width: 400px; margin: auto; }
+    .metric-card { 
+        background-color: #f0f2f6; 
+        padding: 15px; 
+        border-radius: 10px; 
+        margin-bottom: 10px; 
+        box-shadow: 2px 2px 8px rgba(0,0,0,0.1); 
+    }
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 15px; /* Espacio entre pestañas */
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -25,7 +34,11 @@ if 'config_completa' not in st.session_state: st.session_state.config_completa =
 if 'empresa_ruc' not in st.session_state: st.session_state.empresa_ruc = None
 if 'datos_sri_temp' not in st.session_state: st.session_state.datos_sri_temp = {}
 
-# --- 4. FUNCIONES DE CONEXIÓN CON EL BACKEND ---
+
+# --- 4. FUNCIONES DE CONEXIÓN AL BACKEND (Actualizadas) ---
+
+# [ Mantener do_login, consultar_ruc_api, recargar_saldo_admin, emitir_factura_api ]
+# ******************************************************************************
 
 def do_login(email, password):
     """Inicia sesión y guarda el token y estado del usuario"""
@@ -56,7 +69,7 @@ def consultar_ruc_api(ruc):
 
 def recargar_saldo_admin(ruc_cliente, cantidad):
     """Función secreta para el dueño del SaaS"""
-    headers = {"Authorization": f"Bearer {st.session_state.token}"} # Opcional si proteges el endpoint
+    headers = {"Authorization": f"Bearer {st.session_state.token}"}
     try:
         res = requests.post(f"{BACKEND_URL}/admin/recargar", json={"ruc_cliente": ruc_cliente, "cantidad": cantidad})
         if res.status_code == 200:
@@ -72,6 +85,8 @@ def emitir_factura_api(payload):
         return requests.post(f"{BACKEND_URL}/emitir-factura", json=payload, headers=headers)
     except Exception as e:
         return None
+
+# ******************************************************************************
 
 # --- NUEVAS FUNCIONES DE CONEXIÓN DE DATOS ---
 
@@ -121,20 +136,282 @@ def crear_sesion_compra_api(cantidad):
         st.error(f"Error de conexión: {e}")
         return None
 
+# --- 5. MÓDULOS DE INTERFAZ (UI Functions) ---
+
+def show_configuracion():
+    """Muestra el formulario de configuración inicial de RUC y Firma."""
+    st.warning("⚠️ **Perfil Incompleto:** Necesitas configurar tu RUC y Firma para empezar.")
+    
+    with st.expander("🚀 CONFIGURAR MI EMPRESA (Paso Único)", expanded=True):
+        col_a, col_b = st.columns(2)
+        
+        # --- Columna A: Datos SRI ---
+        with col_a:
+            st.subheader("1. Datos del SRI")
+            ruc_search = st.text_input("Ingresa tu RUC", max_chars=13, placeholder="17xxxxxxxx001")
+            
+            razon_social_val = ""
+            
+            if st.button("🔍 Buscar Datos en SRI"):
+                if len(ruc_search) == 13:
+                    with st.spinner("Conectando con SRI..."):
+                        datos = consultar_ruc_api(ruc_search)
+                        if datos and datos['valido']:
+                            st.session_state.datos_sri_temp = datos
+                            st.toast("✅ Datos encontrados", icon="🎉")
+                        else:
+                            st.error("❌ RUC no encontrado o inválido.")
+                            st.session_state.datos_sri_temp = {}
+
+            # Mostrar datos si existen en memoria
+            if st.session_state.datos_sri_temp:
+                d = st.session_state.datos_sri_temp
+                razon_social_val = d.get('razon_social', '')
+                st.info(f"**Nombre:** {razon_social_val}")
+                if d.get('estado') != "ACTIVO":
+                    st.error(f"⚠️ Estado Contribuyente: {d.get('estado')}")
+
+            # Inputs finales
+            final_razon = st.text_input("Razón Social", value=razon_social_val)
+            final_dir = st.text_input("Dirección Matriz", placeholder="Ej: Av. Amazonas y ONU")
+
+        # --- Columna B: Firma Electrónica ---
+        with col_b:
+            st.subheader("2. Firma Electrónica")
+            uploaded_file = st.file_uploader("Archivo .p12", type="p12")
+            uploaded_pass = st.text_input("Contraseña del .p12", type="password")
+
+        st.markdown("---")
+        if st.button("💾 Guardar y Activar Facturación", type="primary"):
+            if ruc_search and final_razon and uploaded_file and uploaded_pass:
+                files = {"archivo_firma": (uploaded_file.name, uploaded_file, "application/x-pkcs12")}
+                data = {"ruc": ruc_search, "razon_social": final_razon, "clave_firma": uploaded_pass}
+                headers = {"Authorization": f"Bearer {st.session_state.token}"}
+                
+                with st.spinner("Validando firma criptográfica..."):
+                    try:
+                        res = requests.post(f"{BACKEND_URL}/configurar-empresa", data=data, files=files, headers=headers)
+                        if res.status_code == 200:
+                            st.balloons()
+                            st.success("¡Perfil Activado! El sistema se recargará...")
+                            st.session_state.config_completa = True
+                            st.session_state.empresa_ruc = ruc_search
+                            time.sleep(2)
+                            st.rerun()
+                        else:
+                            st.error(f"Error: {res.json().get('detail')}")
+                    except Exception as e: st.error(f"Error crítico: {e}")
+            else:
+                st.warning("Por favor completa todos los campos obligatorios.")
+
+
+def show_dashboard():
+    st.subheader("📊 Resumen General")
+    
+    # --- 1. Obtener Datos del Backend ---
+    saldo_data = consultar_saldo_api()
+    creditos_disp = saldo_data['creditos_disponibles'] if saldo_data else 0
+    historial_facturas = obtener_historial_facturas_api()
+    
+    # --- 2. Métricas Clave ---
+    m1, m2, m3, m4 = st.columns(4)
+    
+    with m1: # Créditos restantes
+        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #00c087;">'
+                    f'<h4>Créditos Restantes</h4><h1>{creditos_disp}</h1></div>', 
+                    unsafe_allow_html=True)
+    
+    with m2: # Facturas Emitidas
+        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #007bff;">'
+                    f'<h4>Facturas Emitidas</h4><h1>{len(historial_facturas)}</h1></div>', 
+                    unsafe_allow_html=True)
+                    
+    with m3: # Estado Cuentas
+        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #ffaa00;">'
+                    f'<h4>Facturas en Proceso</h4><h1>{sum(1 for f in historial_facturas if f["estado"] in ["EN PROCESO", "RECIBIDA"])}</h1></div>', 
+                    unsafe_allow_html=True)
+                    
+    with m4: # Total Autorizadas
+        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #ff4b4b;">'
+                    f'<h4>Autorizadas</h4><h1>{sum(1 for f in historial_facturas if f["estado"] == "AUTORIZADO")}</h1></div>', 
+                    unsafe_allow_html=True)
+
+    # --- 3. Historial de facturas ---
+    st.markdown("---")
+    st.subheader("📝 Historial de Facturas Generadas")
+    
+    if historial_facturas:
+        df = pd.DataFrame(historial_facturas)
+        df['fecha_creacion'] = pd.to_datetime(df['fecha_creacion']).dt.strftime('%Y-%m-%d %H:%M')
+        
+        # Renombrar columnas para el usuario final
+        df_display = df.rename(columns={
+            'fecha_creacion': 'Fecha Emisión',
+            'clave_acceso': 'Clave de Acceso',
+            'tipo_comprobante': 'Tipo',
+            'estado': 'Estado SRI'
+        })[['Fecha Emisión', 'Clave de Acceso', 'Tipo', 'Estado SRI']]
+        
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+    else:
+        st.info("Aún no has generado ninguna factura electrónica.")
+
+
+def show_compras():
+    st.subheader("🛒 Comprar Créditos (Recarga)")
+    
+    st.markdown("Selecciona el paquete de facturas que deseas recargar. Serás redirigido a la pasarela de pago segura de Stripe.")
+    
+    col_p1, col_p2 = st.columns(2)
+    
+    # Paquete 1: 50 Créditos
+    with col_p1:
+        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #ff4b4b;">'
+                    f'<h4>50 Facturas</h4><h1>$10.00 USD</h1>'
+                    f'<p>Ideal para negocios pequeños.</p></div>', 
+                    unsafe_allow_html=True)
+        if st.button("Comprar 50 Créditos", key="buy50", type="primary"):
+            url = crear_sesion_compra_api(50)
+            if url:
+                st.info(f"Redirigiendo a Stripe... [Haz clic aquí]({url})")
+                st.markdown(f'<meta http-equiv="refresh" content="0; url={url}">', unsafe_allow_html=True)
+
+    # Paquete 2: 100 Créditos
+    with col_p2:
+        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #3366ff;">'
+                    f'<h4>100 Facturas</h4><h1>$18.00 USD</h1>'
+                    f'<p>Ahorro de $2.00. El mejor valor.</p></div>', 
+                    unsafe_allow_html=True)
+        if st.button("Comprar 100 Créditos", key="buy100", type="primary"):
+            url = crear_sesion_compra_api(100)
+            if url:
+                st.info(f"Redirigiendo a Stripe... [Haz clic aquí]({url})")
+                st.markdown(f'<meta http-equiv="refresh" content="0; url={url}">', unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.subheader("🧾 Historial de Compras")
+    historial_recargas = obtener_historial_recargas_api()
+    if historial_recargas:
+        df_recargas = pd.DataFrame(historial_recargas)
+        df_recargas['fecha_creacion'] = pd.to_datetime(df_recargas['fecha_creacion']).dt.strftime('%Y-%m-%d %H:%M')
+        
+        df_display = df_recargas.rename(columns={
+            'fecha_creacion': 'Fecha Compra',
+            'monto_usd': 'Monto ($)',
+            'creditos_recargados': 'Créditos',
+            'referencia_pago': 'Ref. Pago'
+        })[['Fecha Compra', 'Monto ($)', 'Créditos', 'estado', 'Ref. Pago']]
+        
+        st.dataframe(df_display, use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay recargas registradas.")
+
+
+def show_facturacion_form():
+    st.subheader("📝 Nueva Factura")
+    
+    form_disabled = not st.session_state.config_completa
+    if form_disabled:
+        st.info("👆 Debes completar la configuración para desbloquear este formulario.")
+
+    with st.form("factura_form"):
+        # --- Datos del Emisor y Serie ---
+        col1, col2 = st.columns(2)
+        fecha_emision = col1.text_input("Fecha Emisión (DD/MM/AAAA)", value="10/12/2025", disabled=form_disabled)
+        serie_caja = col2.text_input("Serie (Ej: 001001)", value="001001", disabled=form_disabled)
+        
+        # --- Datos del Cliente ---
+        st.markdown("### 👤 Cliente")
+        c_nombre = st.text_input("Razón Social / Nombre", disabled=form_disabled)
+        c1, c2 = st.columns(2)
+        c_ident = c1.text_input("Identificación", disabled=form_disabled)
+        c_tipo = c2.selectbox("Tipo Documento", ["05 - Cédula", "04 - RUC", "06 - Pasaporte", "07 - Consumidor Final"], disabled=form_disabled)
+        c_dir = st.text_input("Dirección", value="S/N", disabled=form_disabled)
+        
+        # Extraer el código del tipo de documento
+        c_tipo_codigo = c_tipo.split(" ")[0]
+        
+        # --- Detalle y Cálculos ---
+        st.markdown("### 🛒 Detalle")
+        p_desc = st.text_input("Descripción", "Servicios Profesionales", disabled=form_disabled)
+        col_cant, col_prec = st.columns(2)
+        p_cant = col_cant.number_input("Cantidad", min_value=1.0, value=1.0, disabled=form_disabled)
+        p_prec = col_prec.number_input("Precio Unitario", min_value=0.01, value=10.00, disabled=form_disabled)
+        
+        # Cálculos
+        subtotal = p_cant * p_prec
+        iva = round(subtotal * IVA_RATE, 2)
+        total = round(subtotal + iva, 2)
+        
+        st.metric(f"Total a Pagar (Incluye {IVA_RATE*100:.0f}% IVA)", f"${total:.2f}")
+        
+        enviar = st.form_submit_button("🚀 Firmar y Emitir Factura", disabled=form_disabled)
+        
+        if enviar and not form_disabled:
+            # Validaciones mínimas
+            if not c_nombre or not c_ident or len(c_ident) < 5:
+                st.error("Por favor, completa los datos del cliente correctamente.")
+                st.stop()
+                
+            mi_ruc = st.session_state.empresa_ruc
+            
+            payload = {
+                "ruc": mi_ruc if mi_ruc else "9999999999999", 
+                "ambiente": 1, # Usar ambiente 2 para producción
+                "serie": serie_caja,
+                "fecha_emision": fecha_emision,
+                "razon_social_emisor": "MI EMPRESA", # Debería venir de la BD
+                "direccion_matriz": "Matriz", # Debería venir de la BD
+                "direccion_establecimiento": "Sucursal", # Debería venir de la BD
+                "obligado_contabilidad": "NO",
+                "tipo_identificacion_comprador": c_tipo_codigo,
+                "razon_social_comprador": c_nombre,
+                "identificacion_comprador": c_ident,
+                "direccion_comprador": c_dir,
+                "total_sin_impuestos": subtotal,
+                "total_descuento": 0,
+                "importe_total": total,
+                "detalles": [{
+                    "codigo_principal": "IT-01", "descripcion": p_desc, 
+                    "cantidad": p_cant, "precio_unitario": p_prec, 
+                    "descuento": 0, "precio_total_sin_impuesto": subtotal,
+                    "base_imponible": subtotal, "valor_impuesto": iva,
+                    "codigo_impuesto": "2", "codigo_porcentaje": "4", "tarifa": IVA_RATE*100
+                }],
+                "total_impuestos": [{
+                    "codigo": "2", "codigo_porcentaje": "4", 
+                    "base_imponible": subtotal, "valor": iva
+                }]
+            }
+            
+            with st.spinner("Generando XML, Firmando y Enviando al SRI..."):
+                res = emitir_factura_api(payload)
+            
+            if res and res.status_code == 200:
+                data = res.json()
+                st.success(f"✅ ¡Factura Enviada! Clave: {data.get('clave_acceso')}. Estado: {data.get('estado')}")
+                st.toast(f"Saldo restante: {data.get('creditos_restantes')}", icon="💰")
+                # st.rerun() # Para actualizar métricas
+            elif res and res.status_code == 402:
+                st.error("⚠️ No tienes saldo suficiente. Por favor, compra más créditos.")
+            elif res:
+                error_detail = res.json().get('detail', res.text)
+                st.error(f"Error en la emisión: {error_detail}")
 
 
 # ==========================================
-#              INTERFAZ DE USUARIO
+#              FLUJO PRINCIPAL
 # ==========================================
 
-# --- ESCENA 1: LOGIN / REGISTRO (Si no hay token) ---
 if not st.session_state.token:
-    c1, c2, c3 = st.columns([1, 2, 1]) # Centramos el contenido
+    # --- ESCENA 1: LOGIN / REGISTRO ---
+    c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
         st.title("Bienvenido 👋")
         st.markdown("##### Sistema de Facturación Electrónica SRI")
         
         tab_log, tab_reg, tab_ver = st.tabs(["🔐 Ingresar", "📝 Crear Cuenta", "✅ Verificar Email"])
+        # ... (CÓDIGO DE LOGIN / REGISTRO ORIGINAL SE MANTIENE AQUÍ) ...
         
         with tab_log:
             with st.form("login_form"):
@@ -171,297 +448,23 @@ if not st.session_state.token:
                         else: st.error("Código incorrecto")
                     except: st.error("Error conexión")
 
-# --- ESCENA 2: DENTRO DEL SISTEMA (Si hay token) ---
 else:
+    # --- ESCENA 2: DENTRO DEL SISTEMA (DASHBOARD) ---
+    
     # --- HEADER / BARRA SUPERIOR ---
     col_h1, col_h2 = st.columns([8, 2])
-    with col_h1: st.title("📊 Panel de Control")
+    with col_h1: st.title("🧾 Facturador SaaS")
     with col_h2: 
         if st.button("Cerrar Sesión"):
             st.session_state.token = None
             st.rerun()
-
-    # --- BARRA DE ADVERTENCIA / ONBOARDING ---
-    # Esto solo aparece si el usuario es nuevo y no ha subido su firma
-    if not st.session_state.config_completa:
-        st.warning("⚠️ **Perfil Incompleto:** Necesitas configurar tu RUC y Firma para empezar.")
-        
-        with st.expander("🚀 CONFIGURAR MI EMPRESA (Paso Único)", expanded=True):
-            col_a, col_b = st.columns(2)
             
-            with col_a:
-                st.subheader("1. Datos del SRI")
-                ruc_search = st.text_input("Ingresa tu RUC", max_chars=13, placeholder="17xxxxxxxx001")
-                
-                # Variables para autocompletar
-                razon_social_val = ""
-                
-                if st.button("🔍 Buscar Datos en SRI"):
-                    if len(ruc_search) == 13:
-                        with st.spinner("Conectando con SRI..."):
-                            datos = consultar_ruc_api(ruc_search)
-                            if datos and datos['valido']:
-                                st.session_state.datos_sri_temp = datos
-                                st.toast("✅ Datos encontrados", icon="🎉")
-                            else:
-                                st.error("❌ RUC no encontrado o inválido.")
-                                st.session_state.datos_sri_temp = {}
-
-                # Mostrar datos si existen en memoria
-                if st.session_state.datos_sri_temp:
-                    d = st.session_state.datos_sri_temp
-                    razon_social_val = d.get('razon_social', '')
-                    st.info(f"**Nombre:** {razon_social_val}")
-                    if d.get('estado') != "ACTIVO":
-                        st.error(f"⚠️ Estado Contribuyente: {d.get('estado')}")
-
-                # Inputs finales (El usuario puede editarlos si quiere)
-                final_razon = st.text_input("Razón Social", value=razon_social_val)
-                # El SRI no siempre da la dirección, así que la pedimos
-                final_dir = st.text_input("Dirección Matriz", placeholder="Ej: Av. Amazonas y ONU")
-
-            with col_b:
-                st.subheader("2. Firma Electrónica")
-                uploaded_file = st.file_uploader("Archivo .p12", type="p12")
-                uploaded_pass = st.text_input("Contraseña del .p12", type="password")
-
-            st.markdown("---")
-            if st.button("💾 Guardar y Activar Facturación", type="primary"):
-                if ruc_search and final_razon and uploaded_file and uploaded_pass:
-                    files = {"archivo_firma": (uploaded_file.name, uploaded_file, "application/x-pkcs12")}
-                    data = {"ruc": ruc_search, "razon_social": final_razon, "clave_firma": uploaded_pass}
-                    headers = {"Authorization": f"Bearer {st.session_state.token}"}
-                    
-                    with st.spinner("Validando firma criptográfica..."):
-                        try:
-                            res = requests.post(f"{BACKEND_URL}/configurar-empresa", data=data, files=files, headers=headers)
-                            if res.status_code == 200:
-                                st.balloons()
-                                st.success("¡Perfil Activado! El sistema se recargará...")
-                                st.session_state.config_completa = True
-                                st.session_state.empresa_ruc = ruc_search # Actualizamos RUC
-                                time.sleep(2)
-                                st.rerun()
-                            else:
-                                st.error(f"Error: {res.json().get('detail')}")
-                        except Exception as e: st.error(f"Error crítico: {e}")
-                else:
-                    st.warning("Por favor completa todos los campos obligatorios.")
-
-    # --- DASHBOARD (Siempre visible) ---
-    st.markdown("---")
+    # --- FLUJO DE CONFIGURACIÓN / TABS PRINCIPALES ---
     
-    # Métricas Ficticias (Para enamorar al usuario)
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Facturas Hoy", "0")
-    m2.metric("Ventas Mes", "$0.00")
-    m3.metric("Clientes", "0") 
-    m4.metric("Créditos", "Consultando...") 
-    
-    # --- ÁREA DE FACTURACIÓN ---
-    st.subheader("📝 Nueva Factura")
-    
-    # Bloqueamos el formulario si no está completo
-    form_disabled = not st.session_state.config_completa
-    if form_disabled:
-        st.info("👆 Debes completar la configuración arriba para desbloquear este formulario.")
-
-    with st.form("factura_form"):
-        col1, col2 = st.columns(2)
-        # Inputs deshabilitados si form_disabled es True
-        fecha_emision = col1.text_input("Fecha Emisión", value="10/12/2025", disabled=form_disabled)
-        serie_caja = col2.text_input("Serie (Ej: 001001)", value="001001", disabled=form_disabled)
-        
-        st.markdown("### 👤 Cliente")
-        c_nombre = st.text_input("Razón Social / Nombre", disabled=form_disabled)
-        c1, c2 = st.columns(2)
-        c_ident = c1.text_input("Identificación", disabled=form_disabled)
-        c_tipo = c2.selectbox("Tipo Documento", ["05", "04", "06", "07"], disabled=form_disabled)
-        c_dir = st.text_input("Dirección", value="S/N", disabled=form_disabled)
-        
-        st.markdown("### 🛒 Detalle")
-        p_desc = st.text_input("Descripción", "Servicios Profesionales", disabled=form_disabled)
-        col_cant, col_prec = st.columns(2)
-        p_cant = col_cant.number_input("Cantidad", min_value=1.0, value=1.0, disabled=form_disabled)
-        p_prec = col_prec.number_input("Precio Unitario", min_value=0.01, value=10.00, disabled=form_disabled)
-        
-        # Cálculos en tiempo real (Frontend)
-        subtotal = p_cant * p_prec
-        iva = subtotal * 0.15
-        total = subtotal + iva
-        
-        st.metric("Total a Pagar", f"${total:.2f}")
-        
-        enviar = st.form_submit_button("🚀 Firmar y Emitir Factura", disabled=form_disabled)
-        
-        if enviar and not form_disabled:
-            # Payload para el backend
-            mi_ruc = st.session_state.empresa_ruc
-            
-            payload = {
-                # El backend usará el RUC del token, pero enviamos esto por validación Pydantic
-                "ruc": mi_ruc if mi_ruc else "9999999999999", 
-                "ambiente": 1,
-                "serie": serie_caja,
-                "fecha_emision": fecha_emision,
-                "razon_social_emisor": "MI EMPRESA", 
-                "direccion_matriz": "Matriz",
-                "direccion_establecimiento": "Sucursal",
-                "obligado_contabilidad": "NO",
-                "tipo_identificacion_comprador": c_tipo,
-                "razon_social_comprador": c_nombre,
-                "identificacion_comprador": c_ident,
-                "direccion_comprador": c_dir,
-                "total_sin_impuestos": subtotal,
-                "total_descuento": 0,
-                "importe_total": total,
-                "detalles": [{
-                    "codigo_principal": "IT-01", "descripcion": p_desc, 
-                    "cantidad": p_cant, "precio_unitario": p_prec, 
-                    "descuento": 0, "precio_total_sin_impuesto": subtotal,
-                    "base_imponible": subtotal, "valor_impuesto": iva,
-                    "codigo_impuesto": "2", "codigo_porcentaje": "4", "tarifa": 15
-                }],
-                "total_impuestos": [{
-                    "codigo": "2", "codigo_porcentaje": "4", 
-                    "base_imponible": subtotal, "valor": iva
-                }]
-            }
-            
-            with st.spinner("Generando XML y Firmando..."):
-                res = emitir_factura_api(payload)
-            
-            if res and res.status_code == 200:
-                data = res.json()
-                st.success(f"✅ ¡Factura Exitosa! Clave: {data.get('clave_acceso')}")
-                if "creditos_restantes" in data:
-                    st.toast(f"Saldo restante: {data['creditos_restantes']}", icon="💰")
-                with st.expander("Ver XML Firmado"):
-                    st.code(data.get("xml_firmado"), language="xml")
-            elif res and res.status_code == 402:
-                st.error("⚠️ No tienes saldo suficiente. Contacta al administrador.")
-            elif res:
-                st.error(f"Error: {res.text}")
-
-    # --- 5. MÓDULOS DE INTERFAZ (Para limpiar la vista principal) ---
-
-def show_dashboard():
-    st.subheader("📊 Resumen General")
-    
-    # 1. Obtener y mostrar SALDOS
-    saldo_data = consultar_saldo_api()
-    creditos_disp = saldo_data['creditos_disponibles'] if saldo_data else 0
-    
-    # Obtener el total de facturas generadas (para métrica)
-    historial_facturas = obtener_historial_facturas_api()
-    
-    col_a, col_b, col_c = st.columns(3)
-    
-    with col_a:
-        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #00c087;">'
-                    f'<h4>Créditos Restantes</h4><h1>{creditos_disp}</h1></div>', 
-                    unsafe_allow_html=True)
-    
-    with col_b:
-        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #007bff;">'
-                    f'<h4>Facturas Emitidas</h4><h1>{len(historial_facturas)}</h1></div>', 
-                    unsafe_allow_html=True)
-                    
-    with col_c:
-        # Se necesita un endpoint de totales de ventas en el backend para hacer esto real
-        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #ffaa00;">'
-                    f'<h4>Ventas Estimadas (SRI)</h4><h1>$0.00</h1></div>', 
-                    unsafe_allow_html=True)
-
-    # 2. Historial de facturas
-    st.markdown("---")
-    st.subheader("📝 Historial de Facturas Generadas")
-    
-    if historial_facturas:
-        # Convertir a DataFrame de Pandas para una mejor visualización en Streamlit
-        import pandas as pd
-        df = pd.DataFrame(historial_facturas)
-        df['fecha_creacion'] = pd.to_datetime(df['fecha_creacion']).dt.strftime('%Y-%m-%d %H:%M')
-        
-        # Ocultamos el XML largo
-        df_display = df[['fecha_creacion', 'clave_acceso', 'tipo_comprobante', 'estado']]
-        
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
-    else:
-        st.info("Aún no has generado ninguna factura electrónica.")
-
-
-def show_compras():
-    st.subheader("🛒 Comprar Créditos (Recarga)")
-    
-    st.markdown("Selecciona el paquete de facturas que deseas recargar. Serás redirigido a la pasarela de pago segura de Stripe.")
-    
-    col_p1, col_p2 = st.columns(2)
-    
-    # Paquete 1: 50 Créditos
-    with col_p1:
-        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #ff4b4b;">'
-                    f'<h4>50 Facturas</h4><h1>$10.00 USD</h1>'
-                    f'<p>Ideal para negocios pequeños.</p></div>', 
-                    unsafe_allow_html=True)
-        if st.button("Comprar 50 Créditos", key="buy50", type="primary"):
-            url = crear_sesion_compra_api(50)
-            if url:
-                st.info(f"Redirigiendo a Stripe... [Haz clic aquí]({url})")
-                # Aquí puedes usar st.link_button en versiones recientes de Streamlit o js para redirigir
-                # st.link_button("Ir a Pagar", url)
-
-    # Paquete 2: 100 Créditos
-    with col_p2:
-        st.markdown(f'<div class="metric-card" style="border-left: 5px solid #3366ff;">'
-                    f'<h4>100 Facturas</h4><h1>$18.00 USD</h1>'
-                    f'<p>Ahorro de $2.00. El mejor valor.</p></div>', 
-                    unsafe_allow_html=True)
-        if st.button("Comprar 100 Créditos", key="buy100", type="primary"):
-            url = crear_sesion_compra_api(100)
-            if url:
-                st.info(f"Redirigiendo a Stripe... [Haz clic aquí]({url})")
-                # st.link_button("Ir a Pagar", url)
-
-    st.markdown("---")
-    st.subheader("🧾 Historial de Compras")
-    historial_recargas = obtener_historial_recargas_api()
-    if historial_recargas:
-        import pandas as pd
-        df_recargas = pd.DataFrame(historial_recargas)
-        st.dataframe(df_recargas, use_container_width=True, hide_index=True)
-    else:
-        st.info("No hay recargas registradas.")
-
-
-def show_facturacion_form():
-    st.subheader("📝 Nueva Factura")
-    # ... (MANTENER AQUÍ EL CÓDIGO DEL FORMULARIO DE FACTURACIÓN) ...
-    # Copia toda la lógica del formulario de factura de tu app.py original aquí.
-    # El código es extenso, asumimos que lo moverás tal cual.
-    # ... (Si el usuario me envía el form completo, lo incluyo) ...
-
-def show_configuracion():
-    # ... (MANTENER AQUÍ EL CÓDIGO DE ONBOARDING/CONFIGURACIÓN) ...
-    # Copia toda la lógica del `with st.expander("🚀 CONFIGURAR MI EMPRESA ...")`
-    # y la lógica de búsqueda de RUC de tu app.py original aquí.
-    # ...
-
-# --- 6. FLUJO PRINCIPAL RE-ESTRUCTURADO ---
-
-if not st.session_state.token:
-    # Usar el código de Login/Registro/Verificación (ESCENA 1)
-    pass # Asumo que el código de Login se mantiene intacto.
-else:
-    # ESCENA 2: DENTRO DEL SISTEMA
-    # ... (Header y Cerrar Sesión se mantienen) ...
-
-    # Si la configuración está incompleta, forzamos la configuración
     if not st.session_state.config_completa:
         show_configuracion() 
     else:
-        # Pestañas principales para navegar
-        tab_dash, tab_fact, tab_compras = st.tabs(["Panel General", "Facturación", "Comprar Créditos"])
+        tab_dash, tab_fact, tab_compras = st.tabs(["📊 Panel General", "📝 Nueva Factura", "💰 Comprar Créditos"])
 
         with tab_dash:
             show_dashboard()
@@ -471,16 +474,25 @@ else:
             
         with tab_compras:
             show_compras()
-
+            
     # === PANEL ADMIN SECRETO (Solo visible para ti) ===
-    # Compara el RUC logueado con el RUC_ADMIN que definiste arriba
     if st.session_state.empresa_ruc == RUC_ADMIN:
         with st.sidebar:
             st.markdown("---")
             st.error("🔐 MODO SUPER ADMIN")
-            with st.expander("Recargar Saldo a Clientes"):
-                a_ruc = st.text_input("RUC Cliente Destino")
+            # --- Montos Ganados ---
+            try:
+                # Este endpoint debe crearlo en el backend si no existe: /admin/montos-ganados
+                res = requests.get(f"{BACKEND_URL}/admin/montos-ganados", headers={"Authorization": f"Bearer {st.session_state.token}"})
+                monto_total = res.json().get('monto_total_usd', 0.0) if res.status_code == 200 else "N/A"
+            except:
+                monto_total = "Error Conexión"
+                
+            st.metric("Total Ganado (USD)", f"${monto_total}")
+            st.markdown("---")
+            
+            with st.expander("Recargar Saldo a Clientes Manual"):
+                a_ruc = st.text_input("RUC Cliente Destino", max_chars=13)
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
-
