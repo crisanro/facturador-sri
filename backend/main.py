@@ -323,3 +323,17 @@ async def stripe_webhook(request: Request):
 
 
 
+@app.get("/historial-recargas")
+def historial_recargas(user: dict = Depends(get_current_user)):
+    """Muestra el historial de pagos y recargas de créditos del usuario."""
+    historial = database.obtener_historial_transacciones(user['id'])
+    return {"historial": historial}
+
+# --- Nuevo Endpoint de Admin (Montos Ganados) ---
+# Nota: Esto debería tener un control de acceso estricto, aquí solo lo limitamos por API Key o credenciales de Admin
+@app.get("/admin/montos-ganados")
+def montos_ganados():
+    """Muestra el total de dinero ganado por la plataforma."""
+    # RECUERDA: Agregar autenticación de administrador aquí
+    total = database.obtener_monto_total_ganado()
+    return {"monto_total_usd": total}
