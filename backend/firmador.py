@@ -14,7 +14,10 @@ import uuid
 from typing import List
 
 def encontrar_certificado_valido(cert_principal, certs_adicionales):
-    """Busca el certificado de usuario válido y vigente."""
+    """
+    Busca el certificado de usuario válido y vigente.
+    PRIORIDAD: Certificado más nuevo (que expira más tarde).
+    """
     todos_los_certs = []
     if cert_principal:
         todos_los_certs.append(cert_principal)
@@ -22,53 +25,100 @@ def encontrar_certificado_valido(cert_principal, certs_adicionales):
         todos_los_certs.extend(certs_adicionales)
     
     now = datetime.datetime.now(timezone.utc)
-    certificado_vigente_mas_nuevo = None
+    candidatos = []
     
-    for cert in todos_los_certs:
+    print(f"[FIRMA] Analizando {len(todos_los_certs)} certificados...")
+    
+    for idx, cert in enumerate(todos_los_certs, 1):
         try:
             fecha_inicio = cert.not_valid_before_utc
             fecha_fin = cert.not_valid_after_utc
             
-            if not (fecha_inicio <= now <= fecha_fin):
+            # Información del certificado
+            try:
+                cn = cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+            except:
+                cn = "Desconocido"
+            
+            print(f"[FIRMA] Cert {idx}: {cn}")
+            print(f"        Válido: {fecha_inicio.strftime('%Y-%m-%d')} a {fecha_fin.strftime('%Y-%m-%d')}")
+            
+            # Verificar vigencia
+            if now < fecha_inicio:
+                print(f"        ❌ No válido aún")
                 continue
+            
+            if now > fecha_fin:
+                dias_expirado = (now - fecha_fin).days
+                print(f"        ❌ Expirado hace {dias_expirado} días")
+                continue
+            
+            dias_restantes = (fecha_fin - now).days
+            print(f"        ✓ Vigente ({dias_restantes} días restantes)")
             
             # Ignorar CAs
             try:
                 basic_constraints = cert.extensions.get_extension_for_oid(ExtensionOID.BASIC_CONSTRAINTS)
                 if basic_constraints.value.ca:
+                    print(f"        ❌ Es certificado CA")
                     continue
             except x509.ExtensionNotFound:
                 pass
             
             # Verificar digitalSignature
+            tiene_digital_sig = False
             try:
                 key_usage = cert.extensions.get_extension_for_oid(ExtensionOID.KEY_USAGE)
-                if not key_usage.value.digital_signature:
+                if key_usage.value.digital_signature:
+                    tiene_digital_sig = True
+                    print(f"        ✓ Tiene Digital Signature")
+                else:
+                    print(f"        ❌ Sin Digital Signature")
                     continue
             except x509.ExtensionNotFound:
-                pass
+                # Si no tiene Key Usage, asumimos que puede firmar (certificados antiguos)
+                print(f"        ⚠️  Sin Key Usage (asumo válido)")
+                tiene_digital_sig = True
             
             # Debe tener serialNumber
             try:
-                serial_number = cert.subject.get_attributes_for_oid(NameOID.SERIAL_NUMBER)
-                if not serial_number:
+                serial_attrs = cert.subject.get_attributes_for_oid(NameOID.SERIAL_NUMBER)
+                if not serial_attrs:
+                    print(f"        ❌ Sin serialNumber en Subject")
                     continue
+                serial_value = serial_attrs[0].value
+                print(f"        ✓ SerialNumber: {serial_value}")
             except:
+                print(f"        ❌ Error obteniendo serialNumber")
                 continue
             
-            print(f"[FIRMA] ✓ Certificado válido: {cert.subject.rfc4514_string()}")
-            
-            if certificado_vigente_mas_nuevo is None:
-                certificado_vigente_mas_nuevo = cert
-            else:
-                if fecha_fin > certificado_vigente_mas_nuevo.not_valid_after_utc:
-                    certificado_vigente_mas_nuevo = cert
+            # Este certificado es candidato
+            print(f"        🟢 CANDIDATO VÁLIDO")
+            candidatos.append((cert, fecha_fin))
         
         except Exception as e:
-            print(f"[FIRMA] Error procesando certificado: {e}")
+            print(f"[FIRMA] Error en cert {idx}: {e}")
             continue
     
-    return certificado_vigente_mas_nuevo
+    if not candidatos:
+        print(f"[FIRMA] ❌ No se encontraron certificados válidos")
+        return None
+    
+    # Ordenar por fecha de expiración (más nuevo = expira después)
+    candidatos.sort(key=lambda x: x[1], reverse=True)
+    
+    cert_seleccionado = candidatos[0][0]
+    fecha_exp = candidatos[0][1]
+    
+    try:
+        cn = cert_seleccionado.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+    except:
+        cn = "Desconocido"
+    
+    print(f"[FIRMA] ✅ CERTIFICADO SELECCIONADO: {cn}")
+    print(f"[FIRMA]    Expira: {fecha_exp.strftime('%Y-%m-%d')}")
+    
+    return cert_seleccionado
 
 
 def validar_archivo_p12(ruta_p12, password, ruc_usuario):
