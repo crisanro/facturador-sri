@@ -94,9 +94,9 @@ def firmar_xml(xml_string, ruta_p12, password_p12):
         )
         
         # 2. Identificar el certificado de usuario VIGENTE Y MÁS NUEVO
-        user_certificate = encontrar_certificado_valido(certificate_principal, additional_certificates)
+        certificate = encontrar_certificado_valido(certificate_principal, additional_certificates)
         
-        if user_certificate is None:
+        if certificate is None:
             raise Exception("No se pudo identificar un certificado de usuario vigente dentro del P12.")
         
         # 3. Parsear el XML
@@ -110,7 +110,7 @@ def firmar_xml(xml_string, ruta_p12, password_p12):
         xml_firmado = firmar_xml_manual_sha1(
             root, 
             private_key, 
-            user_certificate,
+            certificate,
             additional_certificates
         )
         
@@ -205,7 +205,7 @@ def firmar_xml_manual_sha1(root, private_key, certificate, chain_certificates):
     x509_cert.text = base64.b64encode(cert_der).decode('utf-8')
     
     # 8. Agregar propiedades XAdES
-    agregar_propiedades_xades_manual(signature, user_certificate, signature_id) # Usando 'signature' como padre
+    agregar_propiedades_xades_manual(signature, certificate, signature_id) # Usando 'signature' como padre
     
     # 9. Insertar la firma en el XML original
     root.append(signature)
@@ -287,6 +287,7 @@ def agregar_propiedades_xades_manual(signature, certificate, signature_id):
     
     x509_serial = etree.SubElement(issuer_serial, f"{{{ns_ds}}}X509SerialNumber")
     x509_serial.text = str(certificate.serial_number)
+
 
 
 
