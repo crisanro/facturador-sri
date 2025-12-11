@@ -4,13 +4,19 @@ import os
 import time
 import pandas as pd
 from datetime import datetime, timedelta
+from extra_streamlit_components import CookieManager
 
 # --- 1. CONFIGURACIÓN INICIAL ---
 BACKEND_URL = os.getenv("API_URL", "http://facturador-backend:80") 
 RUC_ADMIN = "1760013210001" 
 IVA_RATE = 0.15 # Tasa de IVA actual en Ecuador
+TOKEN_COOKIE_KEY = 'auth_token_jwt' # Nombre de la cookie para guardar el token
+TOKEN_EXPIRY_DAYS = 7 
 
 st.set_page_config(page_title="Facturación SaaS", page_icon="🧾", layout="wide")
+
+# Inicializar el gestor de cookies ANTES de usar st.session_state
+cookie_manager = CookieManager()
 
 # --- 2. ESTILOS CSS PARA QUE SE VEA PROFESIONAL ---
 st.markdown("""
@@ -30,72 +36,84 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 3. GESTIÓN DE ESTADO (SESIÓN) ---
-# Al usar st.session_state, Streamlit mantiene las variables entre reruns, 
-# simulando la persistencia si el navegador no se cierra.
-if 'token' not in st.session_state: st.session_state.token = None
+# Lógica clave: Intenta obtener el token de la cookie si no está en la sesión
+if 'token' not in st.session_state: 
+    st.session_state.token = cookie_manager.get(TOKEN_COOKIE_KEY)
+
 if 'config_completa' not in st.session_state: st.session_state.config_completa = False
 if 'empresa_ruc' not in st.session_state: st.session_state.empresa_ruc = None
 if 'api_key' not in st.session_state: st.session_state.api_key = None
 if 'datos_sri_temp' not in st.session_state: st.session_state.datos_sri_temp = {}
 
 
-# --- 4. FUNCIONES DE CONEXIÓN AL BACKEND (Actualizadas) ---
+# --- 4. FUNCIONES DE CONEXIÓN AL BACKEND (Corregidas para el token) ---
+
+def logout_user():
+    """Limpia la sesión y la cookie."""
+    st.session_state.token = None
+    st.session_state.config_completa = False
+    st.session_state.empresa_ruc = None
+    st.session_state.api_key = None
+    cookie_manager.delete(TOKEN_COOKIE_KEY)
+    st.rerun()
 
 def consultar_saldo_api(token_a_usar):
-    """Consulta los créditos disponibles, usando el token pasado como argumento."""
+    """
+    Consulta los créditos disponibles y, si el token es válido (200),
+    actualiza los datos de sesión (ruc, config_completa).
+    """
     headers = {"Authorization": f"Bearer {token_a_usar}"}
     try:
-        # Endpoint ligero para checkear la validez del token
         res = requests.get(f"{BACKEND_URL}/saldo-facturas", headers=headers, timeout=5)
         if res.status_code == 200:
-            # Si es válido, actualizamos las variables de sesión con los datos actuales
             data = res.json()
+            # Actualiza los datos de la sesión (esencial para la persistencia)
             st.session_state.config_completa = data.get("ruc_usuario") is not None
             st.session_state.empresa_ruc = data.get("ruc_usuario")
-            st.session_state.api_key = st.session_state.api_key # Mantener la clave API existente
             return data
         return None
     except:
         return None
 
-
 def load_persisted_token():
     """
-    Simula cargar un token persistente desde la sesión de Streamlit y valida su vigencia.
+    Verifica si el token cargado desde la cookie es válido.
     Retorna True si el token es válido.
     """
     if st.session_state.token is not None:
-        # Intentar validar el token existente
+        # Intentar validar el token existente (consultar_saldo_api se encarga de actualizar st.session_state)
         valido = consultar_saldo_api(st.session_state.token)
         
         if valido:
             return True
         else:
-            # Token expirado o inválido. Lo limpiamos.
-            st.session_state.token = None
-            # Si esto ocurre en un rerun automático, mostrará el warning una vez
-            if st.session_state.get('login_attempt') is None:
-                st.session_state.login_attempt = False
-                st.warning("⚠️ Su sesión ha expirado. Por favor, ingrese sus credenciales nuevamente.")
+            # Token expirado o inválido. Lo limpiamos de la sesión y la cookie.
+            logout_user()
+            st.warning("⚠️ Su sesión ha expirado. Por favor, ingrese sus credenciales nuevamente.")
             return False
             
     return False
 
 
 def do_login(email, password):
-    """Inicia sesión y guarda el token y estado del usuario"""   
+    """Inicia sesión, guarda el token en la sesión y en la cookie para persistencia.""" 
     try:
         res = requests.post(f"{BACKEND_URL}/login", json={"email": email, "password": password})
      
         if res.status_code == 200:
             data = res.json()
+            new_token = data["access_token"]
             
             # --- GUARDADO DE VARIABLES DE SESIÓN (CRÍTICO) ---
-            st.session_state.token = data["access_token"]
+            st.session_state.token = new_token
             st.session_state.config_completa = data["configuracion_completa"]
             st.session_state.empresa_ruc = data.get("ruc_usuario")
             st.session_state.api_key = data.get("api_key_persistente")
             # --------------------------------------------------
+            
+            # PERSISTENCIA REAL: Guardar el token en el navegador (cookie)
+            expiry_date = datetime.now() + timedelta(days=TOKEN_EXPIRY_DAYS)
+            cookie_manager.set(TOKEN_COOKIE_KEY, new_token, expires_at=expiry_date)
             
             st.success("✅ ¡Inicio de sesión exitoso! Redirigiendo al panel...")
             time.sleep(1)
@@ -104,13 +122,15 @@ def do_login(email, password):
         elif res.status_code == 403:
             st.error("⚠️ Tu email no ha sido verificado. Revisa los logs por el código.")
         
-        else:
+        else: 
             st.error("❌ Credenciales incorrectas o RUC no asociado a esta cuenta.")
             
     except Exception as e:
         st.error(f"❌ No hay conexión con el Backend: {e}")
 
-# La función consultar_ruc_api se mantiene igual si no hay cambios:
+# ... (El resto de funciones auxiliares consultar_ruc_api, recargar_saldo_admin, emitir_factura_api,
+# obtener_historial_facturas_api, obtener_historial_recargas_api, crear_sesion_compra_api se mantienen) ...
+
 def consultar_ruc_api(ruc):
     """Consulta al backend, quien a su vez consulta al SRI"""
     try:
@@ -140,8 +160,6 @@ def emitir_factura_api(payload):
     except Exception as e:
         return None
 
-# --- NUEVAS FUNCIONES DE CONEXIÓN DE DATOS ---
-# (Las funciones ya modificadas se integran arriba o se mantienen)
 
 def obtener_historial_facturas_api():
     """Consulta el historial de facturas generadas."""
@@ -186,7 +204,6 @@ def obtener_configuracion_api():
     token = st.session_state.token
     if not token: return {"configurada": False}
     
-    # Asumo que API_URL es igual a BACKEND_URL para el frontend
     headers = {"Authorization": f"Bearer {token}"}
     try:
         response = requests.get(f"{BACKEND_URL}/obtener-configuracion-empresa", headers=headers)
@@ -210,6 +227,34 @@ def eliminar_configuracion_api():
         return False, f"Error de conexión: {e}"
 
 
+def configurar_empresa_api(ruc, razon_social, clave_firma, archivo_firma):
+    """Llama al backend para subir la firma y configurar la empresa."""
+    
+    # 1. Crear el FormData
+    files = {'archivo_firma': (archivo_firma.name, archivo_firma.getvalue(), archivo_firma.type)}
+    data = {
+        'ruc': ruc,
+        'razon_social': razon_social,
+        'clave_firma': clave_firma,
+    }
+    
+    headers = {"Authorization": f"Bearer {st.session_state.token}"}
+    
+    try:
+        # 2. Enviar la solicitud multipart/form-data
+        res = requests.post(f"{BACKEND_URL}/configurar-empresa", data=data, files=files, headers=headers)
+        
+        if res.status_code == 200:
+            return True, res.json().get("mensaje", "Configuración guardada.")
+        
+        # Manejar errores de validación de firma o RUC
+        detail = res.json().get("detail", res.text)
+        return False, detail
+        
+    except Exception as e:
+        return False, f"Error de conexión con el backend: {e}"
+
+
 # --- NUEVA FUNCIÓN DE DESCARGA ---
 def generar_opciones_descarga_ui(clave_acceso, estado):
     """Genera los botones HTML para descargar XML y RIDE (PDF)."""
@@ -222,7 +267,6 @@ def generar_opciones_descarga_ui(clave_acceso, estado):
         url_xml = f"{base_url}?tipo=xml"
         
         # Usamos HTML/CSS para alinear los botones en la tabla
-# Usamos HTML/CSS para alinear los botones en la tabla
         return f"""
         <div style="display: flex; gap: 5px; justify-content: center;">
             <a href="{url_pdf}" target="_blank" 
@@ -304,16 +348,14 @@ def show_configuracion():
                 if not all([ruc, razon_social, clave_firma, archivo_firma]):
                     st.error("Por favor, complete todos los campos y suba el archivo.")
                 else:
-                    # Llamar a la función que ya tenías para POST /configurar-empresa
-                    # Asumo que tienes una función configurar_empresa_api definida en otro lugar.
-                    # success, msg = configurar_empresa_api(ruc, razon_social, clave_firma, archivo_firma)
-                    st.error("Función configurar_empresa_api no definida. Simulación.") # Placeholder
+                    success, msg = configurar_empresa_api(ruc, razon_social, clave_firma, archivo_firma)
                     
-                    if True: # Simulación de éxito
-                        st.success("Configuración guardada (Simulación).")
+                    if success:
+                        st.success(msg)
                         obtener_configuracion_api.clear() # Limpiar caché
                         st.rerun()
-                    # else: st.error(msg)
+                    else: 
+                        st.error(msg)
                         
     st.markdown("---")
 
@@ -457,6 +499,7 @@ def show_api_key():
 is_authenticated = False
 
 # 1. Verificar si hay un token existente y si es válido (Persistencia)
+# Esto se ejecuta en cada rerun, leyendo la cookie si es necesario.
 if st.session_state.token is not None:
     is_authenticated = load_persisted_token()
     
@@ -512,8 +555,7 @@ else:
     with col_h1: st.title("🧾 Portal de Servicios API")
     with col_h2: 
         if st.button("Cerrar Sesión"):
-            st.session_state.token = None
-            st.rerun()
+            logout_user() # Usamos la función que limpia sesión Y cookie
             
     # --- NAVEGACIÓN PRINCIPAL ---
     tab_dash, tab_compras, tab_config = st.tabs(["📊 Panel General", "💰 Comprar Créditos", "⚙️ Configuración"])
@@ -551,4 +593,3 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
-
