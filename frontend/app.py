@@ -504,13 +504,16 @@ def generar_api_key_api():
 def show_api_key():
     st.subheader("🔑 Token de Autorización (API Key)")
     
-    if st.session_state.api_key:
+    # Clave de la API persistente (ya cargada desde el backend)
+    current_api_key = st.session_state.get('api_key')
+    
+    if current_api_key:
         st.markdown("Esta es tu clave secreta de acceso persistente. **No expira.**")
-        st.code(st.session_state.api_key, language="text")
+        st.code(current_api_key, language="text")
         
-        # Corrección 1: Clave única para Regenerar
+        # Corrección 1: Botón de Regenerar (Clave única)
         if st.button("🔄 Regenerar Clave Secreta (¡Cuidado!)", 
-                     key="config_regenerar_api_btn",  # <--- CLAVE ÚNICA Y CLARA
+                     key="config_api_regenerar_btn",  # Usamos un prefijo claro
                      help="Esto anulará la clave anterior"):
              res = generar_api_key_api()
              if res:
@@ -521,8 +524,8 @@ def show_api_key():
     else:
         st.warning("Aún no tienes una clave de API persistente. ¡Genérala para conectar sistemas externos!")
         
-        # Corrección 2: Clave única para Generar Inicialmente
-        if st.button("✨ Generar Clave API", key="config_generar_api_btn_initial"): # <--- CLAVE ÚNICA Y CLARA
+        # Corrección 2: Botón de Generar Inicialmente (Clave única)
+        if st.button("✨ Generar Clave API", key="config_api_generar_btn_initial"): # Usamos un prefijo claro
             res = generar_api_key_api()
             if res:
                 st.session_state.api_key = res['api_key'] 
@@ -632,6 +635,7 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
 
 
 
