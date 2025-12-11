@@ -390,6 +390,44 @@ def generar_nueva_api_key(user: dict = Depends(get_current_user)):
 
 
 
+@app.get("/obtener-configuracion-empresa")
+def obtener_configuracion_empresa(user: dict = Depends(get_current_user)):
+    """
+    Obtiene la configuración actual del RUC, Razón Social y ruta del archivo P12.
+    """
+    empresa = database.buscar_empresa_por_email(user['email'])
+    
+    if empresa:
+        # Devuelve solo los datos relevantes para mostrar
+        return {
+            "ruc": empresa['ruc'],
+            "razon_social": empresa['razon_social'],
+            "firma_path": empresa['firma_path'], # Para verificar si existe la firma
+            "configurada": True
+        }
+    return {"configurada": False}
+
+@app.delete("/eliminar-configuracion-empresa")
+def eliminar_configuracion_empresa(user: dict = Depends(get_current_user)):
+    """
+    Elimina la configuración de la empresa (firma, ruc, razón social) y el archivo .p12 asociado.
+    """
+    empresa = database.buscar_empresa_por_email(user['email'])
+    if not empresa:
+        raise HTTPException(status_code=404, detail="No hay configuración de empresa para eliminar.")
+
+    try:
+        # 1. Eliminar el archivo .p12 físico del disco
+        if os.path.exists(empresa['firma_path']):
+            os.remove(empresa['firma_path'])
+
+        # 2. Eliminar la entrada de la base de datos
+        database.eliminar_configuracion_empresa(user['email'])
+
+        return {"mensaje": "Configuración de empresa eliminada exitosamente. Debes volver a configurarla."}
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al eliminar la configuración: {str(e)}")
 
 
 
