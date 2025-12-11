@@ -184,7 +184,7 @@ def login(datos: LoginEmail):
 def configurar_empresa(
     ruc: str = Form(...),
     razon_social: str = Form(...),
-    clave_firma: str = Form(...), # <-- Clave de la firma en texto plano
+    clave_firma: str = Form(...), # Clave en texto plano entrante
     archivo_firma: UploadFile = File(...),
     usuario_actual: dict = Depends(get_current_user)
 ):
@@ -193,70 +193,56 @@ def configurar_empresa(
     if existe and existe['email'] != usuario_actual['email']:
         raise HTTPException(400, "Este RUC ya está registrado por otro usuario.")
 
-    # 1. Definir la ruta de destino ABSOLUTA
-    nombre_archivo = f"{ruc}.p12"
-    path_completo = os.path.join(UPLOAD_DIR, nombre_archivo) # <-- RUTA ABSOLUTA
-
+    path = f"firmas_clientes/{ruc}.p12"
     try:
-        # Asegurar que el directorio exista (aunque lifespan lo haga)
-        os.makedirs(UPLOAD_DIR, exist_ok=True) 
+        with open(path, "wb") as b: 
+            shutil.copyfileobj(archivo_firma.file, b)
         
-        # 2. Escribir el archivo en la ruta ABSOLUTA
-        archivo_firma.file.seek(0)
-        with open(path_completo, "wb") as f: 
-            shutil.copyfileobj(archivo_firma.file, f) # Usar copyfileobj es eficiente
-        
-        # 3. Validar la firma usando la RUTA ABSOLUTA
-        valido, msg = firmador.validar_archivo_p12(path_completo, clave_firma, ruc) 
-    
+        # 1. Validar la firma con la clave EN TEXTO PLANO
+        valido, msg = firmador.validar_archivo_p12(path, clave_firma, ruc)
         if not valido:
-            if os.path.exists(path_completo): os.remove(path_completo)
+            if os.path.exists(path): os.remove(path)
             raise HTTPException(400, f"Error en firma: {msg}")
+            
+        # 2. Cifrar la clave de la firma antes de guardarla en la BD
+        clave_firma_cifrada = auth.encrypt_firma_key(clave_firma)
         
-        # --- LÓGICA DE ENCRIPTACIÓN: Cifrar la clave ---
-        # 2. Cifrar la clave de texto plano (clave_firma) usando Fernet
-        clave_firma_cifrada = encryption.encrypt_data(clave_firma)
-    
-        # 3. Guardar la RUTA ABSOLUTA y la CLAVE CIFRADA en la base de datos
+        # 3. Guardar la clave CIFRADA en la BD
         database.completar_datos_empresa(
             usuario_actual['email'], 
             ruc, 
             razon_social, 
-            path_completo, 
-            clave_firma_cifrada # <-- ¡Guardar la versión CIFRADA!
+            path, 
+            clave_firma_cifrada # <- Guardar la versión cifrada
         )
-    
-        return {"mensaje": "Empresa configurada exitosamente."}
+        return {"mensaje": "Empresa configurada exitosamente. Clave cifrada para mayor seguridad."}
         
     except Exception as e:
-        # Limpieza de archivo en caso de error
-        if os.path.exists(path_completo): os.remove(path_completo)
-        # Devolvemos el error en formato string para debug
-        raise HTTPException(500, f"Error crítico al configurar: {str(e)}")
+        if os.path.exists(path): os.remove(path)
+        # Aseguramos que la excepción de cifrado se muestre
+        raise HTTPException(500, str(e))
 
 @app.post("/emitir-factura")
-def emitir_factura(factura: FacturaCompleta, 
-                   background_tasks: BackgroundTasks, 
-                   user: dict = Depends(get_current_user_api_key)):
-    
-    # Chequeo inicial: Si el usuario tiene créditos
-    if user['creditos'] <= 0:
-        raise HTTPException(400, "Créditos insuficientes. Por favor, recargue su saldo.")
-        
-    # Chequeo inicial: Si tiene la configuración de la empresa
+def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_user)):
     if not user['ruc']: 
         raise HTTPException(400, "Falta configurar empresa.")
+    
+    # Forzamos que el RUC sea el del usuario logueado
+    target_ruc = user['ruc']
+    
+    if not user['firma_path']:
+        raise HTTPException(400, "Falta firma electrónica.")
+    if user['creditos'] <= 0:
+        raise HTTPException(402, "Saldo insuficiente.")
 
     try:
-        # --- PREPARACIÓN DE LA FACTURA ---
+        # 1. DESCIFRAR la clave de la firma de la BD (Cifrado Simétrico)
+        clave_descifrada = auth.decrypt_firma_key(user['firma_clave'])
         
-        # 1. Obtener clave de firma descifrada
-        clave_firma_descifrada = encryption.decrypt_data(user['firma_clave']).strip()
-        
-        # 2. Obtener secuencial y ajustar la factura
+        # 2. Generar y Firmar
         secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
         factura.secuencial = secuencial
-        factura.ruc = user['ruc'] # Aseguramos consistencia
+        factura.ruc = target_ruc 
 
         clave = utils_sri.generar_clave_acceso(
             factura.fecha_emision, "01", factura.ruc, factura.ambiente, 
@@ -264,7 +250,9 @@ def emitir_factura(factura: FacturaCompleta,
         )
         
         xml_crudo = xml_builder.crear_xml_factura(factura, clave)
-        xml_firmado = firmador.firmar_xml(xml_crudo, user['firma_path'], user['firma_clave'])
+        
+        # Usar la clave DESCIFRADA para el proceso de firma
+        xml_firmado = firmador.firmar_xml(xml_crudo, user['firma_path'], clave_descifrada)
         
         # 2. ENVÍO AL SRI (Web Service de Recepción)
         estado_recepcion, mensaje_recepcion = sri_client.enviar_comprobante(xml_firmado)
@@ -585,6 +573,7 @@ def eliminar_configuracion_empresa(user: dict = Depends(get_current_user)):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al eliminar la configuración: {str(e)}")
+
 
 
 
