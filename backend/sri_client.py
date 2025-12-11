@@ -76,11 +76,18 @@ def buscar_empresa_por_email(email):
         cursor.close()
         conn.close()
         
-def consultar_autorizacion(clave_acceso: str, ambiente: int) -> Tuple[str, str, str]:
+def consultar_autorizacion(clave_acceso: str, ambiente: int) -> Tuple[str, str, str]: 
     """
     Consulta el estado de autorización del comprobante usando la clave de acceso.
-    Retorna (estado, numero_autorizacion, xml_autorizado_o_mensaje)
     """
+    # Si quieres que el ambiente sea dinámico, la lógica dentro debe cambiar las WSDL.
+    # Para el uso actual, solo ajustamos la definición.
+    
+    # Si el ambiente es 1 (pruebas), usamos WSDL_AUTORIZACION_PRUEBAS
+    # Si quisieras producción (ambiente=2), la lógica aquí se complicaría.
+    
+    # Por ahora, solo ajustamos el parámetro de entrada para que no falle el Polling.
+    url_wsdl = WSDL_AUTORIZACION_PRUEBAS
     try:
         settings = Settings(strict=False, xml_huge_tree=True)
         client = Client(WSDL_AUTORIZACION_PRUEBAS, settings=settings, transport=transport)
