@@ -330,7 +330,10 @@ def historial_facturas(user: dict = Depends(get_current_user)): # <--- JWT
 # --- ENDPOINTS API REST PROGRAMÁTICA (REQUIERE API KEY) ---
 
 @app.post("/emitir-factura")
-def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_user_api_key)): # <--- API KEY
+def emitir_factura(factura: FacturaCompleta, 
+                   user: dict = Depends(get_current_user_api_key),
+                   background_tasks: BackgroundTasks = BackgroundTasks()): # <--- AGREGAR BackgroundTasks
+    
     if not user['ruc']: 
         raise HTTPException(400, "Falta configurar empresa.")
     
@@ -342,7 +345,6 @@ def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_us
         raise HTTPException(402, "Saldo insuficiente.")
 
     try:
-        # ⚠️ CRÍTICO: Descifrado de la clave de la firma
         clave_descifrada = encryption.decrypt_data(user['firma_clave'])
         
         secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
@@ -359,14 +361,25 @@ def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_us
         
         estado_recepcion, mensaje_recepcion = sri_client.enviar_comprobante(xml_firmado)
         
+        # Guardamos el estado inicial de recepción
         database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, estado_recepcion)
         database.descontar_credito(user['id'])
         
         if estado_recepcion == "RECIBIDA":
+            # 1. Agregamos la consulta de autorización a las tareas en segundo plano
+            ambiente_factura = factura.ambiente # 1 o 2
+            
+            # Usamos la función de polling del módulo sri_client (o crearemos una en ese módulo)
+            background_tasks.add_task(
+                sri_client.iniciar_polling_autorizacion, 
+                clave_acceso=clave, 
+                ambiente=ambiente_factura
+            )
+            
             return {
                 "estado": estado_recepcion, 
                 "clave_acceso": clave, 
-                "mensaje": f"{mensaje_recepcion} Consulte el estado en 10-30 segundos.",
+                "mensaje": f"{mensaje_recepcion} Se iniciará la consulta de autorización en segundo plano.",
                 "creditos_restantes": user['creditos'] - 1
             }
         else:
@@ -509,3 +522,52 @@ def montos_ganados():
     """Muestra el total de dinero ganado por la plataforma."""
     total = database.obtener_monto_total_ganado()
     return {"monto_total_usd": total}
+
+# ============================================================================
+# ENDPOINT PÚBLICO DE DESCARGA POR CLAVE DE ACCESO
+# ============================================================================
+
+@app.get("/facturas/descargar/{clave_acceso}")
+def descargar_comprobante_publico(clave_acceso: str, tipo: str = "pdf"):
+    """
+    Permite descargar el comprobante (PDF o XML) usando solo la clave de acceso.
+    URL pública para enviar al cliente final: /facturas/descargar/49digitos?tipo=pdf
+    """
+    factura = database.obtener_factura_por_clave_sin_usuario(clave_acceso)
+    
+    if not factura:
+        raise HTTPException(status_code=404, detail="Comprobante no encontrado.")
+        
+    if factura['estado'] != 'AUTORIZADO':
+         raise HTTPException(status_code=400, detail=f"El comprobante aún no está Autorizado. Estado actual: {factura['estado']}")
+         
+    if tipo.lower() == 'pdf':
+        path = factura.get('pdf_path')
+        if not path or not os.path.exists(path):
+            raise HTTPException(status_code=404, detail="PDF no encontrado. Contacte al emisor.")
+            
+        with open(path, "rb") as f:
+            pdf_content = f.read()
+            
+        return Response(
+            content=pdf_content,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename=factura_{clave_acceso}.pdf"
+            }
+        )
+        
+    elif tipo.lower() == 'xml':
+        xml_content = factura.get('xml_autorizado') # Usamos el XML autorizado, que incluye el tag de autorización
+        if not xml_content:
+            raise HTTPException(status_code=404, detail="XML Autorizado no encontrado.")
+            
+        return Response(
+            content=xml_content,
+            media_type="application/xml",
+            headers={
+                "Content-Disposition": f"attachment; filename=factura_{clave_acceso}_autorizado.xml"
+            }
+        )
+        
+    raise HTTPException(status_code=400, detail="Tipo de descarga inválido. Use 'pdf' o 'xml'.")
