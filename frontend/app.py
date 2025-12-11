@@ -296,15 +296,23 @@ def show_dashboard():
         df = pd.DataFrame(historial_facturas)
         df['fecha_creacion'] = pd.to_datetime(df['fecha_creacion']).dt.strftime('%Y-%m-%d %H:%M')
         
-        # Renombrar columnas para el usuario final
+        # 1. Aplicar la función de descarga a cada fila para crear la columna 'Acciones'
+        df['Acciones'] = df.apply(
+            lambda row: generar_opciones_descarga_ui(row['clave_acceso'], row['estado']),
+            axis=1
+        )
+        
+        # 2. Renombrar y seleccionar columnas para la visualización
         df_display = df.rename(columns={
             'fecha_creacion': 'Fecha Emisión',
             'clave_acceso': 'Clave de Acceso',
             'tipo_comprobante': 'Tipo',
             'estado': 'Estado SRI'
-        })[['Fecha Emisión', 'Clave de Acceso', 'Tipo', 'Estado SRI']]
+        })[['Fecha Emisión', 'Clave de Acceso', 'Estado SRI', 'Acciones']] # <--- AGREGAR ACCIONES
         
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
+        # 3. Mostrar la tabla con el contenido HTML
+        st.markdown(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
+        
     else:
         st.info("Aún no has generado ninguna factura electrónica.")
 
@@ -381,6 +389,35 @@ def show_api_key():
 
     st.markdown("---")
 
+def generar_opciones_descarga_ui(clave_acceso, estado):
+    """Genera los botones HTML para descargar XML y RIDE (PDF)."""
+    
+    # URL base para el endpoint público de descarga
+    base_url = f"{BACKEND_URL}/facturas/descargar/{clave_acceso}"
+    
+    if estado == 'AUTORIZADO':
+        url_pdf = f"{base_url}?tipo=pdf"
+        url_xml = f"{base_url}?tipo=xml"
+        
+        # Usamos HTML/CSS para alinear los botones en la tabla
+        return f"""
+        <div style="display: flex; gap: 5px; justify-content: center;">
+            <a href="{url_pdf}" target="_blank" 
+               class="btn btn-sm btn-info" 
+               style="background-color: #007bff; color: white; padding: 5px 10px; border-radius: 5px; text-decoration: none;">
+               RIDE (PDF)
+            </a>
+            <a href="{url_xml}" target="_blank" 
+               class="btn btn-sm btn-secondary"
+               style="background-color: #6c757d; color: white; padding: 5px 10px; border-radius: 5px; text-decoration: none;">
+               XML
+            </a>
+        </div>
+        """
+    elif estado == 'DEVUELTA' or estado == 'NO AUTORIZADO':
+        return '<span style="color: red; font-weight: bold;">Rechazada</span>'
+    
+    return '<span style="color: orange;">En Proceso...</span>'
 # ==========================================
 #              FLUJO PRINCIPAL (Corregido)
 # ==========================================
@@ -485,6 +522,7 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
 
 
 
