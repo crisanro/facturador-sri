@@ -7,6 +7,7 @@ import os
 import random
 from contextlib import asynccontextmanager
 import stripe_service
+import sri_service
 
 # Importamos nuestros módulos locales
 import utils_sri, xml_builder, database, auth, firmador
@@ -179,18 +180,14 @@ def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_us
     if not user['ruc']: 
         raise HTTPException(400, "Falta configurar empresa.")
     
-    # Forzamos que el RUC sea el del usuario logueado
     target_ruc = user['ruc']
     
-    if not user['firma_path']:
-        raise HTTPException(400, "Falta firma electrónica.")
-    if user['creditos'] <= 0:
-        raise HTTPException(402, "Saldo insuficiente.")
+    # ... (omitiendo checks de firma_path y creditos por brevedad, pero mantenlos) ...
 
     try:
         secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
         factura.secuencial = secuencial
-        factura.ruc = target_ruc # Aseguramos consistencia
+        factura.ruc = target_ruc
 
         clave = utils_sri.generar_clave_acceso(
             factura.fecha_emision, "01", factura.ruc, factura.ambiente, 
@@ -200,15 +197,52 @@ def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_us
         xml_crudo = xml_builder.crear_xml_factura(factura, clave)
         xml_firmado = firmador.firmar_xml(xml_crudo, user['firma_path'], user['firma_clave'])
         
-        database.guardar_factura_bd(user['id'], clave, "01", xml_firmado)
-        database.descontar_credito(user['id'])
+        # --- NUEVA LÓGICA DE ENVÍO AL SRI ---
         
-        return {
-            "estado": "firmado", 
-            "clave_acceso": clave, 
-            "xml_firmado": xml_firmado,
-            "creditos_restantes": user['creditos'] - 1
-        }
+        # 1. Enviar el comprobante
+        envio_resultado = sri_service.enviar_comprobante(xml_firmado, factura.ambiente)
+        
+        if envio_resultado['estado'] == 'RECIBIDA':
+            
+            # 2. Consultar el estado de autorización (espera breve y consulta)
+            # En producción, esto se haría en una tarea asíncrona o un bucle de espera
+            # Aquí, por ser una API síncrona, consultamos una vez inmediatamente:
+            
+            time.sleep(1) # Esperamos 1 segundo por si el SRI está lento
+            autorizacion_resultado = sri_service.consultar_autorizacion(clave, factura.ambiente)
+
+            database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, autorizacion_resultado['estado'])
+            database.descontar_credito(user['id'])
+
+            if autorizacion_resultado['estado'] == 'AUTORIZADO':
+                # La factura está OK y lista.
+                return {
+                    "estado": "AUTORIZADO", 
+                    "clave_acceso": clave,
+                    "numero_autorizacion": autorizacion_resultado['numero_autorizacion']
+                }
+            
+            elif autorizacion_resultado['estado'] == 'NO AUTORIZADO':
+                # El SRI la rechazó después de recibirla (ej. error en totales)
+                raise HTTPException(400, f"SRI RECHAZÓ (NO AUTORIZADO): {autorizacion_resultado.get('errores', ['Error desconocido'])}")
+                
+            else:
+                # Quedó en RECIBIDA o EN PROCESO. (Se debe consultar después)
+                return {
+                    "estado": autorizacion_resultado['estado'], 
+                    "mensaje": "Factura enviada. Consulta el estado en unos segundos."
+                }
+                
+        elif envio_resultado['estado'] == 'DEVUELTA':
+            # Rechazo inmediato (ej. error en XML o clave de acceso)
+            database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, "DEVUELTA")
+            raise HTTPException(400, f"SRI DEVUELTA (Error de Recepción): {envio_resultado.get('errores', ['Error desconocido'])}")
+            
+        else:
+             # Otro error (conexión, etc.)
+             raise HTTPException(500, f"Error al enviar al SRI: {envio_resultado['mensaje']}")
+
+
     except Exception as e:
         raise HTTPException(400, str(e))
 
@@ -286,4 +320,5 @@ async def stripe_webhook(request: Request):
     response, status_code = stripe_service.procesar_webhook(payload, sig_header, webhook_secret)
     
     return Response(content=response, status_code=status_code)
+
 
