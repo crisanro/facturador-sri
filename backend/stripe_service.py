@@ -67,8 +67,7 @@ def procesar_webhook(payload, sig_header, webhook_secret):
     except stripe.error.SignatureVerificationError as e:
         # Invalid signature
         return "Invalid signature", 400
-
-    # Manejar el evento (Solo recargamos si el pago fue completado)
+        
     if event['type'] == 'checkout.session.completed':
         session = event['data']['object']
         
@@ -76,13 +75,22 @@ def procesar_webhook(payload, sig_header, webhook_secret):
         ruc = session['metadata']['ruc']
         creditos = int(session['metadata']['creditos_a_recargar'])
         
+        # Calcular el monto pagado para registrar la transacción (centavos a USD)
+        monto_centavos = session['amount_total'] 
+        monto_usd = monto_centavos / 100.0 
+        
         # 2. VALIDACIÓN CRÍTICA: Asegurarse de que el pago esté confirmado
         if session.payment_status == "paid":
-            # 3. Aumentar los créditos en la BD (Proceso interno, no modificable por el usuario)
-            database.recargar_creditos(ruc, creditos)
+            
+            # 3. ¡LLAMADA A LA NUEVA FUNCIÓN!
+            database.registrar_recarga_y_aumentar_creditos(
+                ruc, 
+                creditos, 
+                monto_usd, 
+                session.id # Usamos el ID de sesión de Stripe como referencia
+            )
             print(f"✅ Recarga exitosa: {creditos} facturas añadidas al RUC {ruc}")
         
-        # Devolver 200 para que Stripe sepa que lo recibimos
         return "Recarga de créditos procesada", 200
 
     # Manejar otros eventos si fuera necesario
