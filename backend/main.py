@@ -184,11 +184,10 @@ def login(datos: LoginEmail):
 def configurar_empresa(
     ruc: str = Form(...),
     razon_social: str = Form(...),
-    clave_firma: str = Form(...), # Clave en texto plano entrante
+    clave_firma: str = Form(...),
     archivo_firma: UploadFile = File(...),
     usuario_actual: dict = Depends(get_current_user)
 ):
-    # Validar unicidad RUC
     existe = database.buscar_empresa_por_ruc(ruc)
     if existe and existe['email'] != usuario_actual['email']:
         raise HTTPException(400, "Este RUC ya está registrado por otro usuario.")
@@ -204,22 +203,21 @@ def configurar_empresa(
             if os.path.exists(path): os.remove(path)
             raise HTTPException(400, f"Error en firma: {msg}")
             
-        # 2. Cifrar la clave de la firma antes de guardarla en la BD
-        clave_firma_cifrada = auth.encrypt_firma_key(clave_firma)
+        # 2. Cifrar con encryption.py (NO con auth.py)
+        clave_firma_cifrada = encryption.encrypt_data(clave_firma)
         
-        # 3. Guardar la clave CIFRADA en la BD
+        # 3. Guardar
         database.completar_datos_empresa(
             usuario_actual['email'], 
             ruc, 
             razon_social, 
             path, 
-            clave_firma_cifrada # <- Guardar la versión cifrada
+            clave_firma_cifrada
         )
-        return {"mensaje": "Empresa configurada exitosamente. Clave cifrada para mayor seguridad."}
+        return {"mensaje": "Empresa configurada exitosamente."}
         
     except Exception as e:
         if os.path.exists(path): os.remove(path)
-        # Aseguramos que la excepción de cifrado se muestre
         raise HTTPException(500, str(e))
 
 @app.post("/emitir-factura")
@@ -227,7 +225,6 @@ def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_us
     if not user['ruc']: 
         raise HTTPException(400, "Falta configurar empresa.")
     
-    # Forzamos que el RUC sea el del usuario logueado
     target_ruc = user['ruc']
     
     if not user['firma_path']:
@@ -236,10 +233,10 @@ def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_us
         raise HTTPException(402, "Saldo insuficiente.")
 
     try:
-        # 1. DESCIFRAR la clave de la firma de la BD (Cifrado Simétrico)
-        clave_descifrada = auth.decrypt_firma_key(user['firma_clave'])
+        # ⚠️ CAMBIO CRÍTICO: Usar encryption.py en lugar de auth.py
+        clave_descifrada = encryption.decrypt_data(user['firma_clave'])
         
-        # 2. Generar y Firmar
+        # Resto del código sin cambios...
         secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
         factura.secuencial = secuencial
         factura.ruc = target_ruc 
@@ -250,32 +247,24 @@ def emitir_factura(factura: FacturaCompleta, user: dict = Depends(get_current_us
         )
         
         xml_crudo = xml_builder.crear_xml_factura(factura, clave)
-        
-        # Usar la clave DESCIFRADA para el proceso de firma
         xml_firmado = firmador.firmar_xml(xml_crudo, user['firma_path'], clave_descifrada)
         
-        # 2. ENVÍO AL SRI (Web Service de Recepción)
         estado_recepcion, mensaje_recepcion = sri_client.enviar_comprobante(xml_firmado)
         
-        # 3. GUARDAR EN BD Y DESCONTAR CRÉDITO
-        # Guardamos el XML (ya firmado) y el estado inicial
-        database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, estado_recepcion) # Nota: Requerirá modificar la firma de guardar_factura_bd
+        database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, estado_recepcion)
         database.descontar_credito(user['id'])
         
-        # 4. RESPUESTA INMEDIATA
         if estado_recepcion == "RECIBIDA":
-            # Si fue recibida, ahora el front-end puede esperar y consultar el estado de autorización
             return {
                 "estado": estado_recepcion, 
                 "clave_acceso": clave, 
                 "mensaje": f"{mensaje_recepcion} Consulte el estado en 10-30 segundos.",
                 "creditos_restantes": user['creditos'] - 1
             }
-        else: # DEVUELTA, ERROR_CONEXION, DEVUELTA_SOAP
+        else:
              raise HTTPException(400, f"Rechazo en Recepción SRI. {mensaje_recepcion}")
 
     except Exception as e:
-        # Manejo de errores de firma o base de datos
         raise HTTPException(400, str(e))
 
 # --- NUEVO ENDPOINT DE CONSULTA ASÍNCRONA ---
@@ -573,6 +562,7 @@ def eliminar_configuracion_empresa(user: dict = Depends(get_current_user)):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al eliminar la configuración: {str(e)}")
+
 
 
 
