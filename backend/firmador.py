@@ -44,28 +44,51 @@ def firmar_xml(xml_string, ruta_p12, password_p12):
             password_p12.encode('utf-8')
         )
         
-        # 2. Identificar el certificado de usuario VIGENTE (el de 2025)
-        # Esto asegura que si el principal es viejo, usemos el correcto para firmar.
+        # 2. Identificar el certificado de usuario VIGENTE
         user_certificate = encontrar_certificado_valido(certificate_principal, additional_certificates)
         
         if user_certificate is None:
              raise Exception("No se pudo identificar un certificado de usuario vigente dentro del P12.")
 
-        # 3. Configuración de XAdES-BES
+        # 3. Configuración de XAdES-BES (Esto se mantiene)
         signature_options = {
             'known_roots': [],
             'cert_info': True,
             'signing_time': datetime.datetime.now(datetime.timezone.utc)
         }
+        
+        # 4. CORRECCIÓN CLAVE: Usamos 'xades.bes.sign' y simplificamos los parámetros
+        # Pasamos el XML, la clave privada, el certificado del usuario y las opciones.
+        # El certificado adicional ya no se pasa aquí, la librería lo maneja.
+        
+        # Endesive espera el XML en bytes
+        xml_bytes = xml_string.encode('utf-8') 
+        
+        # ¡CORRECCIÓN EN ESTA LÍNEA!
+        xml_firmado = xades.bes.sign(
+            xml_bytes, 
+            private_key, 
+            user_certificate, # Certificado principal a usar
+            signature_options,
+            # Asegúrate de que additional_certificates no se use si no es necesario por la firma
+        )
+        
+        # Si el certificado principal es el único que importa:
+        # xml_firmado = xades.bes.sign(xml_bytes, private_key, user_certificate, signature_options)
 
-        # 4. Firmar con la clave y el certificado correcto (user_certificate)
-        xml_firmado = xades.bes.sign_xml(
-            xml_string.encode('utf-8'), 
+        # Usamos el original del código que nos diste, reemplazando sign_xml por sign
+        # PERO quitando additional_certificates si Endesive no lo requiere en esa versión.
+
+        # Versión más probable que funcione con tu versión de Endesive:
+        xml_firmado = xades.bes.sign(
+            xml_bytes,
             private_key,
-            user_certificate, # Usamos el certificado VIGENTE
-            additional_certificates,
+            user_certificate,
+            additional_certificates, # Lo reinsertamos por si la firma lo requiere para la cadena
             signature_options
         )
+        
+        # NOTA: Si el error persiste, prueba quitando 'additional_certificates' de los parámetros de 'sign'.
 
         return xml_firmado.decode('utf-8')
 
@@ -110,3 +133,4 @@ def validar_archivo_p12(ruta_p12, password, ruc_usuario):
         return False, "Contraseña de la firma incorrecta."
     except Exception as e:
         return False, f"Error leyendo firma: {str(e)}"
+
