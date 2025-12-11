@@ -403,3 +403,18 @@ def obtener_factura_por_clave_sin_usuario(clave_acceso):
     finally:
         cursor.close()
         conn.close()
+
+def buscar_empresa_por_email(email):
+    """Busca los datos de la empresa usando el email del usuario."""
+    conn = get_db_connection()
+    if not conn: return None
+    cursor = conn.cursor(dictionary=True)
+    try:
+        # Nota: Buscar_usuario_por_email ya existe. Esta es una duplicación simple
+        # para satisfacer la llamada en main.py que espera 'buscar_empresa_por_email'.
+        # Aseguramos que la columna 'ruc' y 'razon_social' se devuelvan.
+        cursor.execute("SELECT * FROM empresas WHERE email = %s", (email,))
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+        conn.close()
