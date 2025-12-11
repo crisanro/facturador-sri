@@ -192,24 +192,37 @@ def configurar_empresa(
     if existe and existe['email'] != usuario_actual['email']:
         raise HTTPException(400, "Este RUC ya está registrado por otro usuario.")
 
-    path = f"firmas_clientes/{ruc}.p12"
+    # 1. Definir la ruta de destino ABSOLUTA
+    nombre_archivo = f"{ruc}.p12"
+    path_completo = os.path.join(UPLOAD_DIR, nombre_archivo) # <-- RUTA ABSOLUTA
+
     try:
-        with open(path, "wb") as b: 
-            shutil.copyfileobj(archivo_firma.file, b)
+        # Asegurar que el directorio exista (aunque lifespan lo haga)
+        os.makedirs(UPLOAD_DIR, exist_ok=True) 
         
-        valido, msg = firmador.validar_archivo_p12(path, clave_firma, ruc)
+        # 2. Escribir el archivo en la ruta ABSOLUTA
+        archivo_firma.file.seek(0)
+        with open(path_completo, "wb") as f: 
+            shutil.copyfileobj(archivo_firma.file, f) # Usar copyfileobj es eficiente
+        
+        # 3. Validar la firma usando la RUTA ABSOLUTA
+        valido, msg = firmador.validar_archivo_p12(path_completo, clave_firma, ruc)
+        
         if not valido:
-            if os.path.exists(path): os.remove(path)
+            if os.path.exists(path_completo): os.remove(path_completo)
             raise HTTPException(400, f"Error en firma: {msg}")
             
-        hash_clave_firma = auth.get_password_hash(clave_firma)    
-        database.completar_datos_empresa(usuario_actual['email'], ruc, razon_social, path, 
-    hash_clave_firma)
+        # 4. Guardar la RUTA ABSOLUTA en la base de datos
+        hash_clave_firma = auth.get_password_hash(clave_firma)  
+        database.completar_datos_empresa(usuario_actual['email'], ruc, razon_social, path_completo, hash_clave_firma)
+        
         return {"mensaje": "Empresa configurada exitosamente."}
         
     except Exception as e:
-        if os.path.exists(path): os.remove(path)
-        raise HTTPException(500, str(e))
+        # Limpieza de archivo en caso de error
+        if os.path.exists(path_completo): os.remove(path_completo)
+        # Devolvemos el error en formato string para debug
+        raise HTTPException(500, f"Error crítico al configurar: {str(e)}")
 
 @app.post("/emitir-factura")
 def emitir_factura(factura: FacturaCompleta, 
@@ -365,6 +378,7 @@ def generar_nueva_api_key(user: dict = Depends(get_current_user)):
         return {"mensaje": "API Key generada exitosamente.", "api_key": new_key}
     
     raise HTTPException(500, "Error al guardar la nueva clave en la base de datos.")
+
 
 
 
