@@ -32,6 +32,7 @@ st.markdown("""
 if 'token' not in st.session_state: st.session_state.token = None
 if 'config_completa' not in st.session_state: st.session_state.config_completa = False
 if 'empresa_ruc' not in st.session_state: st.session_state.empresa_ruc = None
+if 'api_key' not in st.session_state: st.session_state.api_key = None # <--- ¡Nuevo Estado!
 if 'datos_sri_temp' not in st.session_state: st.session_state.datos_sri_temp = {}
 
 
@@ -44,12 +45,13 @@ def do_login(email, password):
     """Inicia sesión y guarda el token y estado del usuario"""
     try:
         res = requests.post(f"{BACKEND_URL}/login", json={"email": email, "password": password})
-        if res.status_code == 200:
-            data = res.json()
-            st.session_state.token = data["access_token"]
-            st.session_state.config_completa = data["configuracion_completa"]
-            st.session_state.empresa_ruc = data.get("ruc_usuario") # Vital para saber si es admin
-            st.rerun()
+    if res.status_code == 200:
+        data = res.json()
+        st.session_state.token = data["access_token"]
+        st.session_state.config_completa = data["configuracion_completa"]
+        st.session_state.empresa_ruc = data.get("ruc_usuario")
+        st.session_state.api_key = data.get("api_key_persistente") # <--- ¡Guardar la clave estática!
+        st.rerun()
         elif res.status_code == 403:
             st.error("⚠️ Tu email no ha sido verificado. Revisa los logs por el código.")
         else:
@@ -303,16 +305,16 @@ def show_compras():
 
 def show_api_key():
     st.subheader("🔑 Token de Autorización (API Key)")
-    st.markdown("Este Token se usa para autenticar todas las llamadas a nuestra API, incluyendo la generación de facturas desde sistemas externos (ERP).")
+    st.markdown("Esta es tu clave secreta de acceso persistente para sistemas externos. No expira.")
     
-    # 1. Mostrar el Token
-    st.code(st.session_state.token, language="text")
+    # 1. Mostrar la API Key Persistente
+    st.code(st.session_state.api_key, language="text")
     
-    # 2. Instrucciones de Uso
+    # 2. Instrucciones de Uso (¡El Header ha cambiado!)
     st.markdown("---")
-    st.markdown("##### ¿Cómo usar este Token?")
-    st.info("Debes incluirlo en el encabezado (Header) de cada solicitud HTTP que envíes a nuestra API:")
-    st.code('Authorization: Bearer [TU_TOKEN_AQUÍ]', language="text")
+    st.markdown("##### ¿Cómo usar esta Clave?")
+    st.info("Debes incluirla en el encabezado (Header) de cada solicitud HTTP que envíes a nuestra API:")
+    st.code('X-API-Key: [TU_CLAVE_AQUÍ]', language="text")
     
     st.markdown("##### Ejemplos de Endpoints Disponibles:")
     st.markdown("- `POST /emitir-factura`")
@@ -419,3 +421,4 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
