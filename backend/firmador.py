@@ -103,8 +103,9 @@ def firmar_xml(xml_string, ruta_p12, password_p12):
         try:
             root = etree.fromstring(xml_string.encode('utf-8'))
         except etree.XMLSyntaxError as e:
-            raise Exception(f"XML inválido: {str(e)}")
-            
+            raise Exception("No se pudo identificar un certificado de usuario vigente dentro del P12.")
+
+        
         # 4. FIRMA MANUAL CON SHA1 
         xml_firmado = firmar_xml_manual_sha1(
             root, 
@@ -286,6 +287,7 @@ def agregar_propiedades_xades_manual(signature, certificate, signature_id):
     
     x509_serial = etree.SubElement(issuer_serial, f"{{{ns_ds}}}X509SerialNumber")
     x509_serial.text = str(certificate.serial_number)
+
 
 
 
