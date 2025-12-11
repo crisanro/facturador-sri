@@ -19,6 +19,7 @@ import random
 from contextlib import asynccontextmanager
 import stripe_service
 import sri_service
+import utils_sri, xml_builder, database, auth, firmador, sri_client
 from fastapi.security import APIKeyHeader
 import encryption
 
@@ -253,105 +254,61 @@ def emitir_factura(factura: FacturaCompleta,
         clave_firma_descifrada = encryption.decrypt_data(user['firma_clave']).strip()
         
         # 2. Obtener secuencial y ajustar la factura
-        secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
+       secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
         factura.secuencial = secuencial
-        factura.ruc = user['ruc']
-        
-        # 3. Generar CLAVE de Acceso
+        factura.ruc = user['ruc'] # Aseguramos consistencia
+
         clave = utils_sri.generar_clave_acceso(
             factura.fecha_emision, "01", factura.ruc, factura.ambiente, 
             factura.serie, factura.secuencial, "12345678"
         )
         
-        # 4. Generar XML CRUDO
         xml_crudo = xml_builder.crear_xml_factura(factura, clave)
+        xml_firmado = firmador.firmar_xml(xml_crudo, user['firma_path'], user['firma_clave'])
         
-        # 5. Firmar XML
-        xml_firmado = firmador.firmar_xml(xml_crudo, user['firma_path'], clave_firma_descifrada)
+        # 2. ENVÍO AL SRI (Web Service de Recepción)
+        estado_recepcion, mensaje_recepcion = sri_client.enviar_comprobante(xml_firmado)
         
-        # --- ENVÍO AL SRI ---
+        # 3. GUARDAR EN BD Y DESCONTAR CRÉDITO
+        # Guardamos el XML (ya firmado) y el estado inicial
+        database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, estado_recepcion) # Nota: Requerirá modificar la firma de guardar_factura_bd
+        database.descontar_credito(user['id'])
         
-        # 6. Enviar el comprobante a RECEPCIÓN
-        envio_resultado = sri_service.enviar_comprobante(xml_firmado, factura.ambiente)
-        
-        # DEBUG: Ver qué contiene la respuesta completa
-        print("=" * 60)
-        print("RESPUESTA COMPLETA DEL SRI:")
-        print(envio_resultado)
-        print("=" * 60)
-        
-        if envio_resultado['estado'] == 'RECIBIDA':
-            
-            # Guardar en DB con estado RECIBIDA
-            database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, "RECIBIDA")
-            database.descontar_credito(user['id'])
-
-            # Delegar consulta de autorización a tarea de fondo
-            background_tasks.add_task(
-                sri_service.consultar_y_actualizar_autorizacion, 
-                clave, 
-                factura.ambiente
-            )
-            
+        # 4. RESPUESTA INMEDIATA
+        if estado_recepcion == "RECIBIDA":
+            # Si fue recibida, ahora el front-end puede esperar y consultar el estado de autorización
             return {
-                "estado": "RECIBIDA", 
-                "clave_acceso": clave,
-                "mensaje": "Comprobante recibido por el SRI. El estado final se actualizará en 5-30 segundos."
+                "estado": estado_recepcion, 
+                "clave_acceso": clave, 
+                "mensaje": f"{mensaje_recepcion} Consulte el estado en 10-30 segundos.",
+                "creditos_restantes": user['creditos'] - 1
             }
-                
-        elif envio_resultado['estado'] == 'DEVUELTA':
-            # ============================================================
-            # CORRECCIÓN: Mostrar errores detallados del SRI
-            # ============================================================
-            
-            # Guardar en BD con estado DEVUELTA
-            database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, "DEVUELTA")
-            
-            # Construir mensaje de error detallado
-            mensaje_error = "❌ El SRI DEVOLVIÓ el comprobante:\n\n"
-            
-            # Opción 1: Si tenemos errores_legibles (formato simple)
-            if 'errores_legibles' in envio_resultado and envio_resultado['errores_legibles']:
-                for i, error in enumerate(envio_resultado['errores_legibles'], 1):
-                    mensaje_error += f"{i}. {error}\n"
-            
-            # Opción 2: Si tenemos errores estructurados (formato completo)
-            elif 'errores' in envio_resultado and envio_resultado['errores']:
-                for i, error in enumerate(envio_resultado['errores'], 1):
-                    mensaje_error += f"\n{i}. Error #{error.get('identificador', 'N/A')}\n"
-                    mensaje_error += f"   Mensaje: {error.get('mensaje', 'Sin descripción')}\n"
-                    if error.get('info_adicional'):
-                        mensaje_error += f"   Detalle: {error.get('info_adicional')}\n"
-                    if error.get('tipo'):
-                        mensaje_error += f"   Tipo: {error.get('tipo')}\n"
-            
-            # Si no hay errores específicos, usar mensaje genérico
-            else:
-                mensaje_error += envio_resultado.get('mensaje', 'Error desconocido del SRI')
-            
-            # Devolver como HTTPException con código 400 (error del cliente)
-            raise HTTPException(
-                status_code=400,
-                detail=mensaje_error
-            )
-            
-        else:
-            # Otro tipo de error (conexión, timeout, etc.)
-            raise HTTPException(
-                status_code=500, 
-                detail=f"Error al enviar al SRI: {envio_resultado.get('mensaje', 'Error desconocido')}"
-            )
+        else: # DEVUELTA, ERROR_CONEXION, DEVUELTA_SOAP
+             raise HTTPException(400, f"Rechazo en Recepción SRI. {mensaje_recepcion}")
 
-    except HTTPException:
-        # Re-lanzar las excepciones HTTP que ya generamos
-        raise
-    
     except Exception as e:
-        # Capturar errores inesperados (firma, cifrado, DB, etc.)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Error interno: {str(e)}"
-        )
+        # Manejo de errores de firma o base de datos
+        raise HTTPException(400, str(e))
+
+# --- NUEVO ENDPOINT DE CONSULTA ASÍNCRONA ---
+
+@app.get("/consultar-estado/{clave_acceso}", tags=["Comprobantes"])
+def consultar_estado(clave_acceso: str, user: dict = Depends(get_current_user)):
+    """
+    Consulta el estado de autorización del comprobante en el SRI.
+    """
+    # Esta consulta se hace típicamente 10-30 segundos después del envío inicial
+    
+    estado_autorizacion, num_autorizacion, mensaje_o_xml = sri_client.consultar_autorizacion(clave_acceso)
+    
+    # Aquí puedes agregar lógica para actualizar la BD con el estado final
+    
+    return {
+        "clave_acceso": clave_acceso,
+        "estado": estado_autorizacion,
+        "numero_autorizacion": num_autorizacion,
+        "respuesta_sri": mensaje_o_xml
+    }
 
 
 # ============================================================================
@@ -628,4 +585,5 @@ def eliminar_configuracion_empresa(user: dict = Depends(get_current_user)):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al eliminar la configuración: {str(e)}")
+
 
