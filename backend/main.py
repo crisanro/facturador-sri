@@ -1,5 +1,16 @@
-from fastapi.security import OAuth2PasswordBearer
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, status, Request, Response
+from fastapi import (
+    FastAPI, 
+    HTTPException, 
+    UploadFile, 
+    File, 
+    Form, 
+    Depends, 
+    status,
+    Request, 
+    Response, 
+    BackgroundTasks # <--- ¡AGREGA ESTO!
+)
+from fastapi.security import OAuth2PasswordBearer, APIKeyHeader # <--- Esto es para JWT y API Key
 from pydantic import BaseModel
 from typing import List, Optional
 import shutil
@@ -369,6 +380,7 @@ def historial_facturas(user: dict = Depends(get_current_user)):
     """Muestra la lista de comprobantes emitidos por el usuario."""
     historial = database.obtener_historial_comprobantes(user['id'])
     return {"facturas": historial}
+
 
 
 
