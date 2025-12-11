@@ -49,9 +49,20 @@ def inicializar_tablas():
     CREATE TABLE IF NOT EXISTS puntos_emision (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT, serie VARCHAR(6) NOT NULL, ultimo_secuencial INT DEFAULT 0, FOREIGN KEY (empresa_id) REFERENCES empresas(id), UNIQUE(empresa_id, serie));
     """
     sql_comprobantes = """
-    CREATE TABLE IF NOT EXISTS comprobantes (id INT AUTO_INCREMENT PRIMARY KEY, empresa_id INT, clave_acceso VARCHAR(49) NOT NULL UNIQUE, tipo_comprobante VARCHAR(2) NOT NULL, xml_generado LONGTEXT, estado VARCHAR(20) DEFAULT 'CREADO', fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY (empresa_id) REFERENCES empresas(id));
+    CREATE TABLE IF NOT EXISTS comprobantes (
+        id INT AUTO_INCREMENT PRIMARY KEY, 
+        empresa_id INT, 
+        clave_acceso VARCHAR(49) NOT NULL UNIQUE, 
+        tipo_comprobante VARCHAR(2) NOT NULL, 
+        xml_generado LONGTEXT, 
+        xml_autorizado LONGTEXT NULL,         -- NUEVO: XML con tag de autorización del SRI
+        numero_autorizacion VARCHAR(49) NULL, -- NUEVO: Número de autorización final
+        pdf_path VARCHAR(255) NULL,           -- NUEVO: Ruta local del PDF (RIDE)
+        estado VARCHAR(20) DEFAULT 'CREADO', 
+        fecha_creacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP, 
+        FOREIGN KEY (empresa_id) REFERENCES empresas(id)
+    );
     """
-    
     # TABLA DE TRANSACCIONES (PARA STRPPE)
     sql_transacciones = """
     CREATE TABLE IF NOT EXISTS transacciones (
@@ -339,3 +350,56 @@ def generar_api_key(user_id: int):
         cursor.close()
         conn.close()
 
+
+def actualizar_estado_factura(clave_acceso, estado, num_autorizacion=None, xml_autorizado=None, pdf_path=None):
+    """
+    Actualiza el estado de la factura después de la consulta al SRI o la generación del PDF.
+    """
+    conn = get_db_connection()
+    if not conn: return False
+    cursor = conn.cursor()
+    try:
+        # Construye el SQL de forma dinámica para actualizar solo los campos provistos
+        updates = ["estado = %s"]
+        params = [estado]
+        
+        if num_autorizacion:
+            updates.append("numero_autorizacion = %s")
+            params.append(num_autorizacion)
+        
+        if xml_autorizado:
+            updates.append("xml_autorizado = %s")
+            params.append(xml_autorizado)
+            
+        if pdf_path:
+            updates.append("pdf_path = %s")
+            params.append(pdf_path)
+            
+        params.append(clave_acceso)
+        
+        sql = f"UPDATE comprobantes SET {', '.join(updates)} WHERE clave_acceso = %s"
+        cursor.execute(sql, params)
+        conn.commit()
+        return cursor.rowcount > 0
+    except Error as e:
+        print(f"Error al actualizar estado de factura: {e}")
+        return False
+    finally:
+        cursor.close()
+        conn.close()
+
+
+def obtener_factura_por_clave_sin_usuario(clave_acceso):
+    """
+    Obtiene los detalles de una factura usando solo la clave de acceso (para endpoint público).
+    """
+    conn = get_db_connection()
+    if not conn: return None
+    cursor = conn.cursor(dictionary=True)
+    try:
+        sql = "SELECT * FROM comprobantes WHERE clave_acceso = %s"
+        cursor.execute(sql, (clave_acceso,))
+        return cursor.fetchone()
+    finally:
+        cursor.close()
+        conn.close()
