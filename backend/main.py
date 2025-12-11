@@ -113,8 +113,8 @@ def get_current_user_api_key(api_key: str = Depends(api_key_header)):
     if not user:
         raise HTTPException(status_code=401, detail="API Key inválida o faltante en X-API-Key")
     
-    if user['email_verificado'] == 0 or user['ruc'] is None:
-        raise HTTPException(status_code=403, detail="Cuenta no verificada o configuración (RUC/Firma) incompleta.")
+   # if user['email_verificado'] == 0 or user['ruc'] is None:
+   #     raise HTTPException(status_code=403, detail="Cuenta no verificada o configuración (RUC/Firma) incompleta.")
         
     return user
     
@@ -562,6 +562,7 @@ def eliminar_configuracion_empresa(user: dict = Depends(get_current_user)):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al eliminar la configuración: {str(e)}")
+
 
 
 
