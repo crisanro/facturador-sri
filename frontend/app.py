@@ -271,7 +271,6 @@ def show_dashboard():
     else:
         st.info("Aún no has generado ninguna factura electrónica.")
 
-
 def show_compras():
     st.subheader("🛒 Comprar Créditos (Recarga)")
     
@@ -279,37 +278,27 @@ def show_compras():
     
     col_p1, col_p2 = st.columns(2)
     
-    # Paquete 1: 50 Créditos
+    # Paquete 1: 50 Créditos (A $0.10 c/u)
     with col_p1:
         st.markdown(f'<div class="metric-card" style="border-left: 5px solid #ff4b4b;">'
-                    f'<h4>50 Facturas</h4><h1>$10.00 USD</h1>'
-                    f'<p>Ideal para negocios pequeños.</p></div>', 
+                    f'<h4>50 Facturas</h4><h1>$5.00 USD</h1>'
+                    f'<p>Ideal para negocios con baja rotación.</p></div>', 
                     unsafe_allow_html=True)
-        
-        # --- MODIFICACIÓN CLAVE PARA ABRIR EN NUEVA VENTANA (Paquete 1) ---
-        # Primero obtenemos la URL, luego mostramos el link_button
-        if st.button("Obtener Link de Pago (50)", key="buy50_get_url", type="primary"):
+        if st.button("Comprar 50 Créditos", key="buy50_get_url", type="primary"):
             url = crear_sesion_compra_api(50)
             if url:
                 st.link_button("💳 Ir a Pagar (Se abre en pestaña nueva)", url, help="Pagar con tarjeta o PSE.", type="secondary")
-            # El botón de pago se muestra DESPUÉS de obtener la URL
-        # --- FIN MODIFICACIÓN ---
 
-
-    # Paquete 2: 100 Créditos
+    # Paquete 2: 100 Créditos (A $0.05 c/u - ¡Mejor oferta!)
     with col_p2:
         st.markdown(f'<div class="metric-card" style="border-left: 5px solid #3366ff;">'
-                    f'<h4>100 Facturas</h4><h1>$18.00 USD</h1>'
-                    f'<p>Ahorro de $2.00. El mejor valor.</p></div>', 
+                    f'<h4>100 Facturas</h4><h1>$5.00 USD</h1>'
+                    f'<p>¡Precio promocional! La mejor oferta.</p></div>', 
                     unsafe_allow_html=True)
-        
-        # --- MODIFICACIÓN CLAVE PARA ABRIR EN NUEVA VENTANA (Paquete 2) ---
-        if st.button("Obtener Link de Pago (100)", key="buy100_get_url", type="primary"):
+        if st.button("Comprar 100 Créditos", key="buy100_get_url", type="primary"):
             url = crear_sesion_compra_api(100)
             if url:
                 st.link_button("💳 Ir a Pagar (Se abre en pestaña nueva)", url, help="Pagar con tarjeta o PSE.", type="secondary")
-            # El botón de pago se muestra DESPUÉS de obtener la URL
-        # --- FIN MODIFICACIÓN ---
 
     st.markdown("---")
     st.subheader("🧾 Historial de Compras")
@@ -405,8 +394,6 @@ if not st.session_state.token:
                     except: st.error("Error conexión")
 
 else:
-    # --- ESCENA 2: DENTRO DEL SISTEMA (DASHBOARD) ---
-    
     # --- HEADER / BARRA SUPERIOR ---
     col_h1, col_h2 = st.columns([8, 2])
     with col_h1: st.title("🧾 Portal de Servicios API")
@@ -415,22 +402,31 @@ else:
             st.session_state.token = None
             st.rerun()
             
-    # --- FLUJO DE CONFIGURACIÓN / TABS PRINCIPALES ---
+    # --- NAVEGACIÓN PRINCIPAL ---
     
-    if not st.session_state.config_completa:
-        show_configuracion() 
-    else:
-        # Renombrado de tabs: Eliminamos 'Nueva Factura' y añadimos 'Mi API Key'
-        tab_dash, tab_api, tab_compras = st.tabs(["📊 Panel General", "🔑 Mi API Key", "💰 Comprar Créditos"])
+    # 1. Definir las tres pestañas solicitadas
+    tab_dash, tab_compras, tab_config = st.tabs(["📊 Panel General", "💰 Comprar Créditos", "⚙️ Configuración"])
 
-        with tab_dash:
-            show_dashboard()
-            
-        with tab_api: # <--- ¡Nueva Pestaña! Muestra el Token de Autenticación
-            show_api_key() 
-            
-        with tab_compras:
-            show_compras()
+    # 2. Asignar el contenido
+    with tab_dash:
+        # El dashboard original que muestra saldos y historial de facturas
+        show_dashboard()
+        
+    with tab_compras:
+        # La sección de compra con los planes de 5 y 10 centavos
+        show_compras()
+        
+    with tab_config:
+        st.subheader("🔑 Credenciales y Archivos")
+        
+        # Sub-sección 1: API Key (Se reutiliza la función show_api_key)
+        st.markdown("---")
+        show_api_key() 
+        st.markdown("---")
+        
+        # Sub-sección 2: Subir/Modificar Archivo P12 (Se reutiliza la función show_configuracion)
+        # Nota: Usamos una forma condensada de show_configuracion que solo pide RUC/Firma
+        show_configuracion()
             
     # === PANEL ADMIN SECRETO (Solo visible para ti) ===
     if st.session_state.empresa_ruc == RUC_ADMIN:
@@ -452,6 +448,7 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
 
 
 
