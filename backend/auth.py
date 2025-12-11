@@ -6,7 +6,8 @@ from passlib.context import CryptContext
 # CONFIGURACIÓN DE SEGURIDAD
 SECRET_KEY = "TU_SECRETO_SUPER_SEGURO_CAMBIALO_POR_ALGO_LARGO"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 30 # 30 días
+# Recomendación: Token de API de larga duración (7 días)
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 # 7 días
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -32,4 +33,5 @@ def decode_token(token: str):
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
     except:
+
         return None
