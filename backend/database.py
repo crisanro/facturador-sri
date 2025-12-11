@@ -180,6 +180,28 @@ def completar_datos_empresa(email_usuario, ruc, razon_social, path_firma, clave_
         cursor.close()
         conn.close()
 
+def eliminar_configuracion_empresa(email_usuario: str):
+    """
+    Elimina los datos de configuración de la empresa (RUC, firma, clave) 
+    para permitir una nueva configuración.
+    """
+    conn = get_db_connection()
+    if not conn: return False
+    cursor = conn.cursor()
+    try:
+        # Se ponen los campos sensibles a NULL/vacío.
+        sql = """UPDATE empresas 
+                 SET ruc = NULL, razon_social = NULL, firma_path = NULL, firma_clave = NULL
+                 WHERE email = %s"""
+        cursor.execute(sql, (email_usuario,))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Error as e:
+        print(f"Error al eliminar configuración: {e}")
+        return False
+    finally:
+        cursor.close()
+        conn.close()
 # --- FUNCIONES DE FACTURACIÓN (MANTENEMOS IGUAL) ---
 
 def obtener_siguiente_secuencial(empresa_id, serie):
@@ -415,4 +437,5 @@ def obtener_factura_por_clave_sin_usuario(clave_acceso):
     finally:
         cursor.close()
         conn.close()
+
 
