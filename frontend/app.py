@@ -298,26 +298,44 @@ def show_compras():
     # ... (El resto del código de historial de compras se mantiene) ...
 
 
+def generar_api_key_api():
+    headers = {"Authorization": f"Bearer {st.session_state.token}"}
+    try:
+        res = requests.post(f"{BACKEND_URL}/generar-api-key", headers=headers)
+        if res.status_code == 200:
+            return res.json()
+        st.error(f"Error: {res.json().get('detail')}")
+        return None
+    except Exception as e:
+        st.error(f"Error de conexión: {e}")
+        return None
+
+# Y ahora la función de interfaz:
 def show_api_key():
     st.subheader("🔑 Token de Autorización (API Key)")
-    st.markdown("Esta es tu clave secreta de acceso persistente para sistemas externos. No expira.")
     
-    # 1. Mostrar la API Key Persistente
-    st.code(st.session_state.api_key, language="text")
-    
-    # 2. Instrucciones de Uso (¡El Header ha cambiado!)
+    if st.session_state.api_key:
+        st.markdown("Esta es tu clave secreta de acceso persistente. **No expira.**")
+        st.code(st.session_state.api_key, language="text")
+        
+        # Opción de regenerar la clave si el usuario lo solicita
+        if st.button("🔄 Regenerar Clave Secreta (¡Cuidado!)", help="Esto anulará la clave anterior"):
+             res = generar_api_key_api()
+             if res:
+                 st.session_state.api_key = res['api_key'] # Actualizar estado
+                 st.success("Nueva clave generada. ¡Recarga la página para usarla!")
+                 st.rerun()
+
+    else:
+        st.warning("Aún no tienes una clave de API persistente. ¡Genérala para conectar sistemas externos!")
+        if st.button("✨ Generar Clave API"):
+            res = generar_api_key_api()
+            if res:
+                st.session_state.api_key = res['api_key'] # Actualizar estado
+                st.success("Clave generada. ¡Ya puedes copiarla!")
+                st.rerun()
+
     st.markdown("---")
-    st.markdown("##### ¿Cómo usar esta Clave?")
-    st.info("Debes incluirla en el encabezado (Header) de cada solicitud HTTP que envíes a nuestra API:")
-    st.code('X-API-Key: [TU_CLAVE_AQUÍ]', language="text")
-    
-    st.markdown("##### Ejemplos de Endpoints Disponibles:")
-    st.markdown("- `POST /emitir-factura`")
-    st.markdown("- `GET /saldo-facturas`")
-    st.markdown("- `GET /historial-facturas`")
-    
-    st.warning("⚠️ **Seguridad:** Mantén este Token seguro. Si sospechas que fue comprometido, cierra la sesión para generar uno nuevo.")
-    
 
 # ==========================================
 #              FLUJO PRINCIPAL (Corregido)
@@ -416,5 +434,6 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
 
 
