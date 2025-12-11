@@ -373,7 +373,7 @@ def emitir_factura(factura: FacturaCompleta,
     # --- 1. Proceso de Firma y Envío ---
     try:
         # CRÍTICO: Descifrar la clave de la firma ANTES de usarla
-        clave_descifrada = encryption.descifrar(user['firma_clave']) # Usamos user['firma_clave']
+        clave_descifrada = encryption.decrypt_data(user['firma_clave'])
         
         # 1. Preparar la factura y el secuencial
         secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
@@ -619,6 +619,7 @@ def descargar_comprobante_publico(clave_acceso: str, tipo: str = "pdf"):
         )
         
     raise HTTPException(status_code=400, detail="Tipo de descarga inválido. Use 'pdf' o 'xml'.")
+
 
 
 
