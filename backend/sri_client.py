@@ -8,6 +8,7 @@ import time
 from typing import Tuple
 import database 
 import ride_generator
+from typing import Tuple
 
 # Configuramos logging para ver errores si algo falla
 logging.basicConfig()
@@ -63,7 +64,7 @@ def enviar_comprobante(xml_firmado: str) -> Tuple[str, str]:
         return "ERROR_CONEXION", f"Fallo al conectar o procesar respuesta: {str(e)}"
 
 
-def consultar_autorizacion(clave_acceso: str) -> Tuple[str, str, str]:
+def consultar_autorizacion(clave_acceso: str, ambiente: int) -> Tuple[str, str, str]:
     """
     Consulta el estado de autorización del comprobante usando la clave de acceso.
     Retorna (estado, numero_autorizacion, xml_autorizado_o_mensaje)
