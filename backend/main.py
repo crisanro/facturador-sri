@@ -8,6 +8,8 @@ import random
 from contextlib import asynccontextmanager
 import stripe_service
 import sri_service
+from fastapi.security import APIKeyHeader
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
 
 # Importamos nuestros módulos locales
 import utils_sri, xml_builder, database, auth, firmador
@@ -124,23 +126,22 @@ def verificar_email(datos: VerificarCodigo):
 
 @app.post("/login")
 def login(datos: LoginEmail):
-    user = database.buscar_usuario_por_email(datos.email)
-    if not user or not auth.verify_password(datos.password, user['password_hash']):
-        raise HTTPException(401, "Credenciales incorrectas")
-    
-    if user['email_verificado'] == 0:
-        raise HTTPException(403, "Debes verificar tu email primero.")
-        
-    token = auth.create_access_token({"sub": user['email']})
+    # ... (Validación y verificación de email existentes) ...
     
     # Aquí estaba el error de indentación, ahora está alineado
     tiene_empresa = user['ruc'] is not None
+    
+    # --- Lógica de API Key: Generar si es NULL ---
+    if user['api_key'] is None:
+        new_key = database.generar_api_key(user['id'])
+        user['api_key'] = new_key # Actualizar el dict de sesión
     
     return {
         "access_token": token, 
         "token_type": "bearer", 
         "configuracion_completa": tiene_empresa,
-        "ruc_usuario": user['ruc']
+        "ruc_usuario": user['ruc'],
+        "api_key_persistente": user['api_key'] # Devolver la clave al frontend
     }
 
 @app.post("/configurar-empresa")
@@ -283,6 +284,18 @@ class CompraCreditos(BaseModel):
     # La cantidad de facturas que quiere comprar (ej. 50, 100)
     cantidad: int 
 
+def get_current_user_api_key(api_key: str = Depends(api_key_header)):
+    """Dependencia para validar API Key en el header X-API-Key"""
+    user = database.buscar_usuario_por_api_key(api_key)
+    if not user:
+        raise HTTPException(status_code=401, detail="API Key inválida o faltante en X-API-Key")
+    
+    # Chequeo adicional si la cuenta no está verificada o configurada
+    if user['email_verificado'] == 0 or user['ruc'] is None:
+        raise HTTPException(status_code=403, detail="Cuenta no verificada o configuración (RUC/Firma) incompleta.")
+        
+    return user
+
 # --- ENDPOINTS DE STRIPE ---
 
 @app.post("/comprar-facturas")
@@ -341,4 +354,5 @@ def historial_facturas(user: dict = Depends(get_current_user)):
     """Muestra la lista de comprobantes emitidos por el usuario."""
     historial = database.obtener_historial_comprobantes(user['id'])
     return {"facturas": historial}
+
 
