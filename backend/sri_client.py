@@ -63,18 +63,7 @@ def enviar_comprobante(xml_firmado: str) -> Tuple[str, str]:
     except Exception as e:
         return "ERROR_CONEXION", f"Fallo al conectar o procesar respuesta: {str(e)}"
 
-def buscar_empresa_por_email(email):
-    """Busca los datos de la empresa usando el email del usuario."""
-    conn = get_db_connection()
-    if not conn: return None
-    cursor = conn.cursor(dictionary=True)
-    try:
-        # Nota: La tabla 'empresas' tiene una columna 'email' y otras columnas de empresa (ruc, razon_social, etc.)
-        cursor.execute("SELECT * FROM empresas WHERE email = %s", (email,))
-        return cursor.fetchone()
-    finally:
-        cursor.close()
-        conn.close()
+
         
 def consultar_autorizacion(clave_acceso: str, ambiente: int) -> Tuple[str, str, str]: 
     """
