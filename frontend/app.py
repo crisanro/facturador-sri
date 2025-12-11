@@ -25,7 +25,9 @@ cookies = cookie_manager.get_all()
 # --- 2. ESTILOS CSS PARA QUE SE VEA PROFESIONAL ---
 st.markdown("""
     <style>
-    .stButton>button { width: 100%; font-weight: bold; border-radius: 8px; }
+    .stButton>button { width: 100%; font-weight: bold; border-r
+    
+    adius: 8px; }
     .metric-card { 
         background-color: #f0f2f6; 
         padding: 15px; 
@@ -84,26 +86,26 @@ def logout_user():
         pass  # Ignorar errores al eliminar cookies
     
     st.rerun()
-    
+
 
 def consultar_saldo_api(token_a_usar):
     """
-    Consulta los créditos disponibles y, si el token es válido (200),
-    actualiza los datos de sesión (ruc, config_completa).
+    Consulta los créditos disponibles y actualiza datos de sesión.
     """
     headers = {"Authorization": f"Bearer {token_a_usar}"}
     try:
         res = requests.get(f"{BACKEND_URL}/saldo-facturas", headers=headers, timeout=5)
         if res.status_code == 200:
             data = res.json()
-            # Actualiza los datos de la sesión (esencial para la persistencia)
+            # Actualizar sesión
             st.session_state.config_completa = data.get("ruc_usuario") is not None
             st.session_state.empresa_ruc = data.get("ruc_usuario")
-            st.session_state.api_key = data.get("api_key_persistente") # <-- ASEGURAR ESTO
+            st.session_state.api_key = data.get("api_key_persistente")
             return data
         return None
-    except:
+    except Exception:
         return None
+
 
 def load_persisted_token():
     """
@@ -134,6 +136,47 @@ def load_persisted_token():
             return False
             
     return False
+
+
+def do_login(email, password):
+    """Inicia sesión y guarda el token de forma persistente.""" 
+    try:
+        st.write("🔍 DEBUG: Intentando login...")  # DEBUG
+        res = requests.post(f"{BACKEND_URL}/login", json={"email": email, "password": password})
+        st.write(f"🔍 DEBUG: Status code: {res.status_code}")  # DEBUG
+     
+        if res.status_code == 200:
+            data = res.json()
+            st.write(f"🔍 DEBUG: Data recibida: {data.keys()}")  # DEBUG
+            new_token = data["access_token"]
+            
+            # GUARDADO DE VARIABLES DE SESIÓN
+            st.session_state.token = new_token
+            st.session_state.config_completa = data.get("configuracion_completa", False)
+            st.session_state.empresa_ruc = data.get("ruc_usuario")
+            st.session_state.api_key = data.get("api_key_persistente")
+            st.session_state.initial_load_done = False  # Resetear para validar
+            
+            st.write("🔍 DEBUG: Variables de sesión guardadas")  # DEBUG
+            st.write(f"Token guardado: {st.session_state.token[:20]}...")  # DEBUG
+            
+            # GUARDAR EN COOKIE
+            expiry_date = datetime.now() + timedelta(days=TOKEN_EXPIRY_DAYS)
+            cookie_manager.set(TOKEN_COOKIE_KEY, new_token, expires_at=expiry_date)
+            
+            st.success("✅ ¡Inicio de sesión exitoso!")
+            time.sleep(2)
+            st.rerun()
+            
+        elif res.status_code == 403:
+            st.error("⚠️ Tu email no ha sido verificado.")
+        else: 
+            st.error(f"❌ Credenciales incorrectas. Status: {res.status_code}")
+            
+    except Exception as e:
+        st.error(f"❌ Error de conexión: {e}")
+        import traceback
+        st.code(traceback.format_exc())  # DEBUG
 
 
 def do_login(email, password):
@@ -428,125 +471,6 @@ def show_configuracion():
                     else:
                         st.error(msg)
 
-
-def show_configuracion():
-    """Muestra y permite editar la configuración de firma electrónica"""
-    config = obtener_configuracion_api()
-    
-    st.subheader("Firma Electrónica y Datos de Facturación")
-
-    is_configurada = config.get("configurada", False)
-    
-    if is_configurada:
-        # ===== MODO EDICIÓN =====
-        st.success("✅ Configuración de empresa registrada y vigente.")
-        
-        # Mostrar datos actuales
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("RUC", config.get("ruc", "—"))
-        with col2:
-            st.metric("Razón Social", config.get("razon_social", "—"))
-        
-        firma_path = config.get("firma_path") or ''
-        nombre_archivo = os.path.basename(firma_path) if firma_path else 'No configurado'
-        st.caption(f"📄 Archivo .p12 actual: **{nombre_archivo}**")
-        
-        st.markdown("---")
-        
-        # OPCIÓN 1: Editar solo la firma (mantener RUC y Razón Social)
-        with st.expander("🔄 Actualizar Firma Electrónica"):
-            st.info("Si su firma ha expirado, puede actualizarla aquí sin cambiar los demás datos.")
-            with st.form("actualizar_firma_form"):
-                nueva_clave = st.text_input("Nueva Clave de Firma", type="password")
-                nuevo_archivo = st.file_uploader(
-                    "Subir Nueva Firma (.p12)", 
-                    type=["p12"],
-                    help="Tamaño máximo: 100 KB"
-                )
-                
-                if st.form_submit_button("Actualizar Firma", type="primary"):
-                    if not nueva_clave or not nuevo_archivo:
-                        st.error("Complete todos los campos.")
-                    elif nuevo_archivo.size > 100 * 1024:  # 100 KB en bytes
-                        st.error("⚠️ El archivo supera el tamaño máximo de 100 KB.")
-                    else:
-                        # Reutilizar RUC y Razón Social existentes
-                        success, msg = configurar_empresa_api(
-                            config.get("ruc"),
-                            config.get("razon_social"),
-                            nueva_clave,
-                            nuevo_archivo
-                        )
-                        if success:
-                            st.success(msg)
-                            obtener_configuracion_api.clear()
-                            time.sleep(1)
-                            st.rerun()
-                        else:
-                            st.error(msg)
-        
-        # OPCIÓN 2: Eliminar todo y reconfigurar desde cero
-        st.markdown("---")
-        st.warning("⚠️ **Eliminar toda la configuración** (incluye RUC, Razón Social y Firma)")
-        
-        if st.button("🗑️ Eliminar Configuración Completa", type="secondary"):
-            st.session_state.confirm_delete = True
-            
-        if st.session_state.get("confirm_delete"):
-            st.error("⚠️ ¿Está seguro? Esta acción eliminará **todos** los datos de configuración.")
-            col_del, col_cancel = st.columns(2)
-            with col_del:
-                if st.button("SÍ, Eliminar Todo", key="confirm_del_btn", type="primary"):
-                    success, msg = eliminar_configuracion_api()
-                    if success:
-                        st.session_state.confirm_delete = False
-                        st.success(msg)
-                        obtener_configuracion_api.clear()
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error(msg)
-            with col_cancel:
-                if st.button("Cancelar", key="cancel_del_btn"):
-                    st.session_state.confirm_delete = False
-                    st.rerun()
-
-    else:
-        # ===== MODO CREACIÓN (Primera vez) =====
-        st.warning("⚠️ Su empresa no está configurada. Complete el formulario para empezar a facturar.")
-        
-        with st.form("config_empresa_form", clear_on_submit=True):
-            ruc = st.text_input("RUC (Ecuador)", max_chars=13, placeholder="1234567890001")
-            razon_social = st.text_input("Razón Social / Nombre Comercial", placeholder="Mi Empresa S.A.")
-            clave_firma = st.text_input("Clave de la Firma Electrónica", type="password")
-            archivo_firma = st.file_uploader(
-                "Subir Archivo de Firma (.p12)", 
-                type=["p12"],
-                help="Tamaño máximo: 100 KB"
-            )
-            
-            submitted = st.form_submit_button("💾 Guardar Configuración", type="primary")
-
-            if submitted:
-                if not all([ruc, razon_social, clave_firma, archivo_firma]):
-                    st.error("❌ Por favor, complete todos los campos.")
-                elif len(ruc) != 13:
-                    st.error("❌ El RUC debe tener exactamente 13 dígitos.")
-                elif archivo_firma.size > 100 * 1024:  # 100 KB
-                    st.error(f"⚠️ El archivo pesa {archivo_firma.size / 1024:.1f} KB. Máximo permitido: 100 KB.")
-                else:
-                    success, msg = configurar_empresa_api(ruc, razon_social, clave_firma, archivo_firma)
-                    if success:
-                        st.success(msg)
-                        obtener_configuracion_api.clear()
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error(msg)
-
-                        
-
 def show_compras():
     st.subheader("🛒 Comprar Créditos (Recarga)")
     
@@ -751,6 +675,7 @@ else:
                 a_cant = st.number_input("Cantidad a Recargar", value=100)
                 if st.button("Acreditar Saldo"):
                     recargar_saldo_admin(a_ruc, a_cant)
+
 
 
 
