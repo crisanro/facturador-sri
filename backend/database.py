@@ -2,6 +2,7 @@ import mysql.connector
 from mysql.connector import Error
 import os
 import secrets
+import uuid
 
 DB_CONFIG = {
     'host': os.getenv('DB_HOST', 'localhost'),
@@ -304,5 +305,35 @@ def buscar_usuario_por_api_key(api_key):
         cursor.execute("SELECT * FROM empresas WHERE api_key = %s", (api_key,))
         return cursor.fetchone()
     finally:
+        cursor.close()
+        conn.close()
+
+def generar_uuid_api_key():
+    """Genera una API Key fuerte usando UUID4 y la convierte a string"""
+    # Usamos 32 caracteres de UUID4 sin guiones.
+    return str(uuid.uuid4()).replace('-', '')
+
+def generar_api_key(user_id: int):
+    """Genera una nueva API Key y la guarda en la base de datos para el usuario."""
+    conn = get_db_connection()
+    if not conn: return None
+    cursor = conn.cursor()
+    
+    nueva_key = generar_uuid_api_key()
+    
+    try:
+        sql = "UPDATE empresas SET api_key = %s WHERE id = %s"
+        cursor.execute(sql, (nueva_key, user_id))
+        conn.commit()
+        
+        if cursor.rowcount > 0:
+            return nueva_key # Retorna la clave generada si fue exitoso
+        return None
+        
+    except Error as e:
+        print(f"Error al guardar API Key: {e}")
+        return None
+        
+    finally: 
         cursor.close()
         conn.close()
