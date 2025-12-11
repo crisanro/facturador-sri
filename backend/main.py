@@ -8,9 +8,9 @@ from fastapi import (
     status,
     Request, 
     Response, 
-    BackgroundTasks # <--- ¡AGREGA ESTO!
+    BackgroundTasks,Header
 )
-from fastapi.security import APIKeyHeader # <--- Esto es para JWT y API Key
+from fastapi.security import OAuth2PasswordBearer, APIKeyHeader # <--- Esto es para JWT y API Key
 from pydantic import BaseModel
 from typing import List, Optional
 import shutil
@@ -38,7 +38,8 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="SaaS Facturación Ecuador", lifespan=lifespan)
 
 # Seguridad
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login") #
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True) #
 
 # --- MODELOS DE DATOS ---
 
@@ -121,22 +122,30 @@ def get_current_user(authorization: str = Header(..., alias="Authorization")):
     """
     Lee el token del header Authorization: Bearer [token] y valida.
     """
+    # 1. Verifica el formato "Bearer "
     if not authorization or not authorization.startswith("Bearer "):
-         raise HTTPException(status_code=401, detail="Token JWT inválido o faltante en Authorization: Bearer.")
-         
-    # Extraemos solo el token (quitando "Bearer ")
+        # Esto lanzará 401 si el header no es Authorization: Bearer ...
+        raise HTTPException(status_code=401, detail="Token JWT inválido o faltante en Authorization: Bearer.")
+        
+    # 2. Extrae solo el token
     token = authorization.split(" ")[1]
     
+    # 3. Decodifica el token (usando auth.py)
     payload = auth.decode_token(token)
     if not payload:
         raise HTTPException(401, "Token JWT inválido o expirado")
         
+    # 4. Busca el usuario en la BD (usando database.py)
     email = payload.get("sub")
     user = database.buscar_usuario_por_email(email)
     if not user:
         raise HTTPException(401, "Usuario no encontrado")
+        
+    # [Opcional pero recomendable] Añadir chequeo de configuración para acceso web:
+    if user['email_verificado'] == 0:
+        raise HTTPException(403, "Debes verificar tu email primero.")
+    
     return user
-
 # --- ENDPOINTS ---
 
 @app.post("/registrar-usuario")
@@ -571,6 +580,7 @@ def eliminar_configuracion_empresa(user: dict = Depends(get_current_user)):
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al eliminar la configuración: {str(e)}")
+
 
 
 
