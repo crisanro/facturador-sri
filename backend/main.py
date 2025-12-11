@@ -346,47 +346,61 @@ def historial_facturas(user: dict = Depends(get_current_user)): # <--- JWT
 
 # --- ENDPOINTS API REST PROGRAMÁTICA (REQUIERE API KEY) ---
 
-@app.post("/emitir-factura")
 def emitir_factura(factura: FacturaCompleta, 
-                   user: dict = Depends(get_current_user_api_key),
-                   background_tasks: BackgroundTasks = BackgroundTasks()): # <--- AGREGAR BackgroundTasks
+                   user: dict = Depends(get_current_user_api_key), 
+                   background_tasks: BackgroundTasks = BackgroundTasks()):
     
-    if not user['ruc']: 
-        raise HTTPException(400, "Falta configurar empresa.")
+    # --- 0. Pre-validaciones rápidas (Usando 'user' directamente) ---
     
-    target_ruc = user['ruc']
-    
-    if not user['firma_path']:
-        raise HTTPException(400, "Falta firma electrónica.")
-    if user['creditos'] <= 0:
+    # CRÍTICO: user ya contiene toda la info de la BD (ruc, firma_path, creditos)
+    if not user.get('ruc'): 
+        raise HTTPException(400, "Falta configurar RUC y Razón Social de la empresa.")
+        
+    if not user.get('firma_path'):
+        raise HTTPException(400, "Falta firma electrónica o clave de firma.")
+        
+    if user.get('creditos', 0) <= 0:
         raise HTTPException(402, "Saldo insuficiente.")
 
+    target_ruc = user['ruc']
+    
+    # --- 1. Proceso de Firma y Envío ---
     try:
-        clave_descifrada = encryption.decrypt_data(user['firma_clave'])
+        # CRÍTICO: Descifrar la clave de la firma ANTES de usarla
+        clave_descifrada = encryption.descifrar(user['firma_clave']) # Usamos user['firma_clave']
         
+        # 1. Preparar la factura y el secuencial
         secuencial = database.obtener_siguiente_secuencial(user['id'], factura.serie)
+        if secuencial is None:
+             raise Exception("Error al obtener el siguiente secuencial de la base de datos.")
+             
         factura.secuencial = secuencial
-        factura.ruc = target_ruc 
-
+        factura.ruc = target_ruc
+        
+        # 2. Generar Clave de Acceso
         clave = utils_sri.generar_clave_acceso(
             factura.fecha_emision, "01", factura.ruc, factura.ambiente, 
             factura.serie, factura.secuencial, "12345678"
         )
         
+        # 3. Generar XML base
         xml_crudo = xml_builder.crear_xml_factura(factura, clave)
+        
+        # 4. Firmar el XML
         xml_firmado = firmador.firmar_xml(xml_crudo, user['firma_path'], clave_descifrada)
         
+        # 5. Enviar al SRI (Web Service de Recepción)
         estado_recepcion, mensaje_recepcion = sri_client.enviar_comprobante(xml_firmado)
         
-        # Guardamos el estado inicial de recepción
+        # 6. Guardar estado inicial y descontar crédito
         database.guardar_factura_bd(user['id'], clave, "01", xml_firmado, estado_recepcion)
         database.descontar_credito(user['id'])
         
+        # --- 7. Resultado ---
         if estado_recepcion == "RECIBIDA":
-            # 1. Agregamos la consulta de autorización a las tareas en segundo plano
-            ambiente_factura = factura.ambiente # 1 o 2
             
-            # Usamos la función de polling del módulo sri_client (o crearemos una en ese módulo)
+            # Lanzar el Polling en segundo plano
+            ambiente_factura = factura.ambiente 
             background_tasks.add_task(
                 sri_client.iniciar_polling_autorizacion, 
                 clave_acceso=clave, 
@@ -397,13 +411,24 @@ def emitir_factura(factura: FacturaCompleta,
                 "estado": estado_recepcion, 
                 "clave_acceso": clave, 
                 "mensaje": f"{mensaje_recepcion} Se iniciará la consulta de autorización en segundo plano.",
-                "creditos_restantes": user['creditos'] - 1
+                "creditos_restantes": user.get('creditos', 1) - 1 # Usamos el crédito descontado
             }
         else:
-             raise HTTPException(400, f"Rechazo en Recepción SRI. {mensaje_recepcion}")
+            # Si el SRI rechaza en Recepción (DEVUELTA)
+            raise HTTPException(400, f"Rechazo en Recepción SRI: {mensaje_recepcion}")
 
+    # --- Manejo de ERRORES ---
+    except HTTPException:
+        # Re-lanzar errores HTTPException (como los de saldo o rechazo SRI)
+        raise
+    except ValueError as ve:
+        # Captura errores comunes de firma (clave descifrada incorrecta)
+        print(f"❌ ERROR: CLAVE DE FIRMA INCORRECTA: {ve}")
+        raise HTTPException(400, "Error de autenticación de la firma electrónica. La clave de la firma es incorrecta.")
     except Exception as e:
-        raise HTTPException(400, str(e))
+        # Captura cualquier otro error (XML mal formado, error de Zeep, etc.)
+        print(f"❌ ERROR CRÍTICO EN EMISIÓN DE FACTURA: {e}")
+        raise HTTPException(400, f"Error interno al procesar la factura: {str(e)}")
 
 # NOTA: Los siguientes endpoints deberían usar get_current_user_api_key si son para API REST, 
 # pero los mantengo con get_current_user según tu fragmento, asumiendo que son usados en el dashboard web.
@@ -588,5 +613,6 @@ def descargar_comprobante_publico(clave_acceso: str, tipo: str = "pdf"):
         )
         
     raise HTTPException(status_code=400, detail="Tipo de descarga inválido. Use 'pdf' o 'xml'.")
+
 
 
