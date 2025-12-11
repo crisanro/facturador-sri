@@ -1,5 +1,5 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, status, Request, Response
 from fastapi.security import OAuth2PasswordBearer
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, status, Request, Response
 from pydantic import BaseModel
 from typing import List, Optional
 import shutil
@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 import stripe_service
 import sri_service
 from fastapi.security import APIKeyHeader
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True)
+
 
 # Importamos nuestros módulos locales
 import utils_sri, xml_builder, database, auth, firmador
@@ -90,7 +90,21 @@ class Recarga(BaseModel):
     cantidad: int
 
 # --- DEPENDENCIA ---
+# 1. Definir el esquema de seguridad para API Key
+api_key_header = APIKeyHeader(name="X-API-Key", auto_error=True) 
 
+# 2. Definición de la dependencia de API Key
+def get_current_user_api_key(api_key: str = Depends(api_key_header)):
+    """Dependencia para validar API Key en el header X-API-Key"""
+    user = database.buscar_usuario_por_api_key(api_key)
+    if not user:
+        raise HTTPException(status_code=401, detail="API Key inválida o faltante en X-API-Key")
+    
+    if user['email_verificado'] == 0 or user['ruc'] is None:
+        raise HTTPException(status_code=403, detail="Cuenta no verificada o configuración (RUC/Firma) incompleta.")
+        
+    return user
+    
 def get_current_user(token: str = Depends(oauth2_scheme)):
     payload = auth.decode_token(token)
     if not payload:
@@ -355,6 +369,7 @@ def historial_facturas(user: dict = Depends(get_current_user)):
     """Muestra la lista de comprobantes emitidos por el usuario."""
     historial = database.obtener_historial_comprobantes(user['id'])
     return {"facturas": historial}
+
 
 
 
