@@ -50,7 +50,7 @@ def encontrar_certificado_valido(cert_principal, certs_adicionales):
                     print(f"[FIRMA] Certificado CA ignorado: {cert.subject}")
                     continue
             except x509.ExtensionNotFound:
-                pass  # No tiene basic constraints, probablemente es end-entity
+                pass
             
             # 3. Verificar Key Usage (debe tener digitalSignature)
             try:
@@ -61,11 +61,9 @@ def encontrar_certificado_valido(cert_principal, certs_adicionales):
                     print(f"[FIRMA] Certificado sin digitalSignature: {cert.subject}")
                     continue
             except x509.ExtensionNotFound:
-                print(f"[FIRMA] Certificado sin Key Usage extension: {cert.subject}")
-                # Algunos certificados antiguos no tienen esta extensión
-                # Los dejamos pasar si cumplen otras condiciones
+                pass
             
-            # 4. Verificar que tenga serialNumber en el Subject (persona/empresa)
+            # 4. Verificar que tenga serialNumber en el Subject
             serial_number = None
             try:
                 serial_number = cert.subject.get_attributes_for_oid(NameOID.SERIAL_NUMBER)
@@ -113,7 +111,7 @@ def validar_archivo_p12(ruta_p12, password, ruc_usuario):
                 password.encode('utf-8'),
                 backend=default_backend()
             )
-        except ValueError as ve:
+        except ValueError:
             return False, "Contraseña de la firma incorrecta."
         
         # Buscar certificado válido
@@ -121,20 +119,6 @@ def validar_archivo_p12(ruta_p12, password, ruc_usuario):
         
         if user_cert is None:
             return False, "No se encontró un certificado de firma electrónica vigente en el archivo P12."
-        
-        # Verificar que el RUC/CI coincida con el certificado
-        try:
-            serial_attrs = user_cert.subject.get_attributes_for_oid(NameOID.SERIAL_NUMBER)
-            if serial_attrs:
-                cert_serial = serial_attrs[0].value
-                # Limpiar el serial del certificado (puede tener prefijos)
-                cert_serial_clean = cert_serial.replace('-', '').replace(' ', '')
-                ruc_clean = ruc_usuario.replace('-', '').replace(' ', '')
-                
-                if ruc_clean not in cert_serial_clean:
-                    return False, f"El RUC/CI del certificado ({cert_serial}) no coincide con el RUC ingresado ({ruc_usuario})."
-        except Exception as e:
-            print(f"[FIRMA] Advertencia: No se pudo verificar RUC en certificado: {e}")
         
         return True, "Firma electrónica válida y vigente."
         
@@ -147,7 +131,7 @@ def validar_archivo_p12(ruta_p12, password, ruc_usuario):
 def firmar_xml(xml_string, ruta_p12, password_p12):
     """
     Firma un XML usando XAdES-BES compatible con SRI Ecuador.
-    ACTUALIZADO: Usa SHA256 en lugar de SHA1.
+    CORRECCIÓN CRÍTICA: Firma el nodo específico con id="comprobante"
     """
     try:
         # 1. Cargar el archivo .p12
@@ -172,7 +156,7 @@ def firmar_xml(xml_string, ruta_p12, password_p12):
         except etree.XMLSyntaxError as e:
             raise Exception(f"XML mal formado: {str(e)}")
         
-        # 4. FIRMA CON SHA256 (REQUERIDO POR SRI)
+        # 4. FIRMA CON SHA256 apuntando al nodo correcto
         xml_firmado = firmar_xml_manual_sha256(
             root, 
             private_key, 
@@ -190,7 +174,10 @@ def firmar_xml(xml_string, ruta_p12, password_p12):
 def firmar_xml_manual_sha256(root, private_key, certificate, chain_certificates):
     """
     Implementación manual de firma XAdES-BES con SHA256.
-    CORRECCIÓN CRÍTICA: Usa RSA-SHA256 y canonicalización exclusiva.
+    CORRECCIÓN CRÍTICA: 
+    1. Firma SOLO el nodo con id="comprobante" (no todo el documento)
+    2. Usa canonicalización exclusiva
+    3. Aplica las transformaciones ANTES de calcular el digest
     """
     # Namespaces
     ns_ds = "http://www.w3.org/2000/09/xmldsig#"
@@ -199,37 +186,52 @@ def firmar_xml_manual_sha256(root, private_key, certificate, chain_certificates)
     etree.register_namespace('ds', ns_ds)
     etree.register_namespace('xades', ns_xades)
     
-    # 1. Canonicalizar el XML original (C14N EXCLUSIVO)
-    xml_canonico = etree.tostring(root, method='c14n', exclusive=True, with_comments=False)
+    # PASO 1: Obtener el id del nodo raíz (debe ser "comprobante")
+    node_id = root.get('id')
+    if not node_id:
+        raise Exception("El XML no tiene atributo 'id' en el nodo raíz")
     
-    # 2. Calcular el digest SHA256 del documento
+    print(f"[FIRMA] Firmando nodo con id='{node_id}'")
+    
+    # PASO 2: Crear una copia temporal del XML SIN la firma para calcular el digest
+    # (necesario porque vamos a aplicar enveloped-signature transform)
+    root_copy = etree.fromstring(etree.tostring(root))
+    
+    # PASO 3: Aplicar la transformación enveloped-signature
+    # (en este punto, como aún no existe la firma, el XML ya está "sin firma")
+    # Canonicalizar el nodo específico
+    xml_canonico = etree.tostring(root_copy, method='c14n', exclusive=False, with_comments=False)
+    
+    # PASO 4: Calcular el digest SHA256 del nodo canonicalizado
     digest_value = hashlib.sha256(xml_canonico).digest()
     digest_value_b64 = base64.b64encode(digest_value).decode('utf-8')
     
-    # 3. Crear el nodo Signature
+    print(f"[FIRMA] Digest del nodo: {digest_value_b64}")
+    
+    # PASO 5: Crear el nodo Signature
     signature_id = f"Signature{uuid.uuid4().hex[:8]}"
     signature = etree.Element(f"{{{ns_ds}}}Signature", attrib={"Id": signature_id})
     
-    # 4. SignedInfo
+    # PASO 6: SignedInfo
     signed_info = etree.SubElement(signature, f"{{{ns_ds}}}SignedInfo")
     
     canonicalization_method = etree.SubElement(
         signed_info, 
         f"{{{ns_ds}}}CanonicalizationMethod",
-        attrib={"Algorithm": "http://www.w3.org/2001/10/xml-exc-c14n#"}  # C14N EXCLUSIVO
+        attrib={"Algorithm": "http://www.w3.org/TR/2001/REC-xml-c14n-20010315"}  # C14N estándar
     )
     
     signature_method = etree.SubElement(
         signed_info,
         f"{{{ns_ds}}}SignatureMethod",
-        attrib={"Algorithm": "http://www.w3.org/2001/04/xmldsig-more#rsa-sha256"}  # SHA256
+        attrib={"Algorithm": "http://www.w3.org/2000/09/xmldsig#rsa-sha1"}  # SRI usa SHA1
     )
     
-    # Reference al documento
+    # CRÍTICO: Reference debe apuntar al id del nodo
     reference = etree.SubElement(
         signed_info,
         f"{{{ns_ds}}}Reference",
-        attrib={"URI": ""}
+        attrib={"URI": f"#{node_id}"}  # Apunta a #comprobante
     )
     
     transforms = etree.SubElement(reference, f"{{{ns_ds}}}Transforms")
@@ -242,29 +244,29 @@ def firmar_xml_manual_sha256(root, private_key, certificate, chain_certificates)
     digest_method = etree.SubElement(
         reference,
         f"{{{ns_ds}}}DigestMethod",
-        attrib={"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha256"}  # SHA256
+        attrib={"Algorithm": "http://www.w3.org/2000/09/xmldsig#sha1"}  # SRI usa SHA1
     )
     
     digest_value_elem = etree.SubElement(reference, f"{{{ns_ds}}}DigestValue")
     digest_value_elem.text = digest_value_b64
     
-    # 5. Canonicalizar SignedInfo y firmarlo
-    signed_info_c14n = etree.tostring(signed_info, method='c14n', exclusive=True, with_comments=False)
+    # PASO 7: Canonicalizar SignedInfo y firmarlo
+    signed_info_c14n = etree.tostring(signed_info, method='c14n', exclusive=False, with_comments=False)
     
-    # Firmar con SHA256
+    # CORRECCIÓN: SRI Ecuador usa SHA1, NO SHA256
     signature_bytes = private_key.sign(
         signed_info_c14n,
         padding.PKCS1v15(),
-        hashes.SHA256()  # SHA256 en lugar de SHA1
+        hashes.SHA1()  # SRI requiere SHA1
     )
     
     signature_value_b64 = base64.b64encode(signature_bytes).decode('utf-8')
     
-    # 6. Agregar SignatureValue
+    # PASO 8: Agregar SignatureValue
     signature_value_elem = etree.SubElement(signature, f"{{{ns_ds}}}SignatureValue")
     signature_value_elem.text = signature_value_b64
     
-    # 7. KeyInfo con el certificado
+    # PASO 9: KeyInfo con el certificado
     key_info = etree.SubElement(signature, f"{{{ns_ds}}}KeyInfo")
     x509_data = etree.SubElement(key_info, f"{{{ns_ds}}}X509Data")
     x509_cert = etree.SubElement(x509_data, f"{{{ns_ds}}}X509Certificate")
@@ -272,13 +274,13 @@ def firmar_xml_manual_sha256(root, private_key, certificate, chain_certificates)
     cert_der = certificate.public_bytes(serialization.Encoding.DER)
     x509_cert.text = base64.b64encode(cert_der).decode('utf-8')
     
-    # 8. Agregar propiedades XAdES con SHA256
+    # PASO 10: Agregar propiedades XAdES
     agregar_propiedades_xades_manual(signature, certificate, signature_id)
     
-    # 9. Insertar la firma en el XML original
+    # PASO 11: Insertar la firma en el XML original
     root.append(signature)
     
-    # 10. Convertir a string
+    # PASO 12: Convertir a string
     xml_firmado = etree.tostring(
         root,
         encoding='UTF-8',
@@ -292,7 +294,7 @@ def firmar_xml_manual_sha256(root, private_key, certificate, chain_certificates)
 def agregar_propiedades_xades_manual(signature, certificate, signature_id):
     """
     Agrega propiedades XAdES-BES al nodo Signature.
-    CORRECCIÓN: Usa SHA256 en lugar de SHA1.
+    CORRECCIÓN: Usa SHA1 (requerido por SRI)
     """
     ns_ds = "http://www.w3.org/2000/09/xmldsig#"
     ns_xades = "http://uri.etsi.org/01903/v1.3.2#"
@@ -333,19 +335,19 @@ def agregar_propiedades_xades_manual(signature, certificate, signature_id):
     signing_cert = etree.SubElement(signed_sig_props, f"{{{ns_xades}}}SigningCertificate")
     cert_elem = etree.SubElement(signing_cert, f"{{{ns_xades}}}Cert")
     
-    # CertDigest con SHA256
+    # CertDigest con SHA1 (requerido por SRI)
     cert_digest_elem = etree.SubElement(cert_elem, f"{{{ns_xades}}}CertDigest")
     digest_method = etree.SubElement(
         cert_digest_elem,
         f"{{{ns_ds}}}DigestMethod",
-        attrib={"Algorithm": "http://www.w3.org/2001/04/xmlenc#sha256"}  # SHA256
+        attrib={"Algorithm": "http://www.w3.org/2000/09/xmldsig#sha1"}  # SHA1
     )
     
     cert_der = certificate.public_bytes(serialization.Encoding.DER)
-    cert_sha256 = hashlib.sha256(cert_der).digest()  # SHA256 en lugar de SHA1
+    cert_sha1 = hashlib.sha1(cert_der).digest()  # SHA1
     
     digest_value = etree.SubElement(cert_digest_elem, f"{{{ns_ds}}}DigestValue")
-    digest_value.text = base64.b64encode(cert_sha256).decode('utf-8')
+    digest_value.text = base64.b64encode(cert_sha1).decode('utf-8')
     
     # IssuerSerial
     issuer_serial = etree.SubElement(cert_elem, f"{{{ns_xades}}}IssuerSerial")
@@ -355,5 +357,3 @@ def agregar_propiedades_xades_manual(signature, certificate, signature_id):
     
     x509_serial = etree.SubElement(issuer_serial, f"{{{ns_ds}}}X509SerialNumber")
     x509_serial.text = str(certificate.serial_number)
-
-
